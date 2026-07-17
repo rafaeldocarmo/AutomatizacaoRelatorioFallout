@@ -458,7 +458,12 @@ with aba_erros:
     def agg_dfts(sub):
         pares = {}
         tem_pontual = False
+        tem_outros  = False
         for _, row in sub.iterrows():
+            orig = str(row.get("DefectNumber_orig", "") or "").strip().lower()
+            if orig == "enviado e-mail - outros times":
+                tem_outros = True
+                continue
             dft = row["DefectNumber__c"]
             if pd.isna(dft) or int(dft) == -1:
                 continue
@@ -473,6 +478,8 @@ with aba_erros:
         partes = [f"DFT{k} · {ms} · {ph}" for k, (ms, ph) in sorted(pares.items())]
         if tem_pontual:
             partes.append("Falha Pontual")
+        if tem_outros:
+            partes.append("Em avaliação - Outros Times")
         return " | ".join(partes)
 
     dfts_por_erro = (
