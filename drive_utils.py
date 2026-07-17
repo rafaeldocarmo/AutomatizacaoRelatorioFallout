@@ -111,7 +111,25 @@ def baixar_arquivos_drive():
     """
     svc      = _service()
     root_id  = st.secrets["google"].get("folder_id") or os.environ.get("GDRIVE_FOLDER_ID", "")
-    raiz     = _listar_pasta(svc, root_id)
+    if not root_id:
+        st.error("`folder_id` não configurado nos secrets. Adicione o ID da pasta raiz do Drive.")
+        st.stop()
+
+    raiz = _listar_pasta(svc, root_id)
+    if not raiz:
+        st.error(
+            f"A pasta do Drive (ID `{root_id}`) está vazia ou não foi compartilhada com a "
+            f"service account. Compartilhe-a com o e-mail da service account (permissão Viewer)."
+        )
+        st.stop()
+
+    _esperado = {"Base Móvel", "Cross Sell"}
+    if not (_esperado & set(raiz.keys())):
+        st.error(
+            "Nenhuma pasta de jornada encontrada no Drive. "
+            f"Esperado: {sorted(_esperado)}. Encontrado na pasta raiz: {sorted(raiz.keys())}"
+        )
+        st.stop()
 
     tmp = tempfile.mkdtemp(prefix="mayh_drive_")
 

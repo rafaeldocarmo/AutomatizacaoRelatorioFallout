@@ -236,7 +236,28 @@ aba_consolidado, aba_distribuicao, aba_erros, aba_defeitos = st.tabs(["📊 Cons
 
 with aba_consolidado:
     _nome_dash = jornada_escolhida.replace(" + ", "_").replace(" ", "_")
-    dashboard_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), f"dashboard_{_nome_dash}.png")
+    _app_dir   = os.path.dirname(os.path.abspath(__file__))
+    _data_dir  = _base_dir()   # local: mesmo que _app_dir | Drive: pasta temporária
+
+    # ── Botão: gerar relatório ────────────────────────────────────────────────
+    if st.button(f"🔄 Gerar relatório — {jornada_escolhida}"):
+        import subprocess, sys
+        with st.spinner(f"Gerando dashboard de {jornada_escolhida}..."):
+            _res = subprocess.run(
+                [sys.executable, os.path.join(_app_dir, "pipeline.py"), jornada_escolhida],
+                cwd=_data_dir,               # dados (extrações/ + xlsx) ficam aqui
+                capture_output=True, text=True,
+            )
+        if _res.returncode == 0:
+            st.success("Relatório gerado com sucesso!")
+        else:
+            st.error("Erro ao gerar o relatório:")
+            st.code(_res.stderr[-3000:] if _res.stderr else _res.stdout[-3000:])
+
+    # Procura o PNG: primeiro na pasta de dados (onde o pipeline gera), depois na do app
+    dashboard_path = os.path.join(_data_dir, f"dashboard_{_nome_dash}.png")
+    if not os.path.exists(dashboard_path):
+        dashboard_path = os.path.join(_app_dir, f"dashboard_{_nome_dash}.png")
     if os.path.exists(dashboard_path):
         import base64
         img_b64 = base64.b64encode(open(dashboard_path, "rb").read()).decode()
@@ -287,7 +308,7 @@ with aba_consolidado:
         st.download_button("⬇ Baixar PNG", data=img_bytes,
                            file_name=f"dashboard_{_nome_dash}.png", mime="image/png")
     else:
-        st.warning("Dashboard não encontrado. Rode: `python pipeline.py \"Nome da Jornada\"`")
+        st.warning("Dashboard não encontrado. Clique em **Gerar relatório** acima.")
 
 with aba_distribuicao:
     st.subheader(f"Distribuição Fallout — {mes_labels[mes_escolhido]}")
