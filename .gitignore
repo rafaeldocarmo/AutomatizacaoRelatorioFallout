@@ -1,0 +1,9 @@
+extrações/
+*.xlsx
+*.png
+*.pdf
+*.zip
+__pycache__/
+.env
+*.json
+.streamlit/secrets.toml
