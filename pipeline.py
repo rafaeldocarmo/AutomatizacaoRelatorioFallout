@@ -1105,9 +1105,11 @@ if len(proj_labels) > 1:
     ax_chart.plot(proj_labels, proj_vals, color=COR_GRAY, linewidth=2,
                   linestyle="--", marker="o", markersize=6, markerfacecolor="white",
                   label="Projeção futura")
-    ax_chart.annotate(f"{proj_vals[-1]:.2f}%".replace(".", ","),
-                       xy=(proj_labels[-1], proj_vals[-1]), xytext=(8, 0),
-                       textcoords="offset points", ha="left", va="center", fontsize=8)
+    # Rótulo em cada ponto projetado (pula o primeiro, que é o mês atual já rotulado)
+    for lbl, v in zip(proj_labels[1:], proj_vals[1:]):
+        ax_chart.annotate(f"{v:.2f}%".replace(".", ","), xy=(lbl, v), xytext=(0, 7),
+                           textcoords="offset points", ha="center", va="bottom",
+                           fontsize=7, color=COR_GRAY)
 
 # Linha de meta
 todas_labels = labels_hist + proj_labels[1:]
