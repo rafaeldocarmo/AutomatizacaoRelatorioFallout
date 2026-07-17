@@ -400,10 +400,14 @@ with aba_erros:
 
     df_err = df_mes.copy()
     df_err["ErrorHandled__c"] = df_err["ErrorHandled__c"].fillna("(sem mensagem de erro)")
+    _orig_lower = df_err["DefectNumber_orig"].astype(str).str.strip().str.lower()
+    df_err["_outros_times"] = _orig_lower == "enviado e-mail - outros times"
+    df_err["_pontual"]      = df_err["DefectNumber__c"] == 999999
     df_err["tem_dft"] = (
         df_err["DefectNumber__c"].notna() &
         (df_err["DefectNumber__c"] != -1) &
-        (df_err["DefectNumber__c"] != 999999)
+        (df_err["DefectNumber__c"] != 999999) &
+        ~df_err["_outros_times"]
     )
     df_err["Data"] = df_err["CreatedDate"].dt.tz_convert("America/Sao_Paulo").dt.date
 
@@ -425,7 +429,10 @@ with aba_erros:
     with col_f1:
         busca = st.text_input("Buscar na mensagem de erro", "")
     with col_f2:
-        filtro_dft = st.selectbox("Filtrar por DFT", ["Todos", "Com DFT", "Sem DFT"])
+        filtro_dft = st.selectbox(
+            "Filtrar por DFT",
+            ["Todos", "Com DFT", "Sem DFT", "Falha Pontual", "Outros Times"],
+        )
 
     if dt_ini and dt_fim:
         df_err = df_err[(df_err["Data"] >= dt_ini) & (df_err["Data"] <= dt_fim)]
@@ -434,7 +441,11 @@ with aba_erros:
     if filtro_dft == "Com DFT":
         df_err = df_err[df_err["tem_dft"]]
     elif filtro_dft == "Sem DFT":
-        df_err = df_err[~df_err["tem_dft"]]
+        df_err = df_err[~df_err["tem_dft"] & ~df_err["_pontual"] & ~df_err["_outros_times"]]
+    elif filtro_dft == "Falha Pontual":
+        df_err = df_err[df_err["_pontual"]]
+    elif filtro_dft == "Outros Times":
+        df_err = df_err[df_err["_outros_times"]]
 
     # ── Pivot por dia ─────────────────────────────────────────────────────────
     pivot_erros = (
