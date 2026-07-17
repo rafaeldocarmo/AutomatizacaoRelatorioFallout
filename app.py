@@ -457,18 +457,23 @@ with aba_erros:
     # ── DFTs por mensagem de erro ──────────────────────────────────────────────
     def agg_dfts(sub):
         pares = {}
+        tem_pontual = False
         for _, row in sub.iterrows():
             dft = row["DefectNumber__c"]
-            if pd.isna(dft) or int(dft) in (-1, 999999):
+            if pd.isna(dft) or int(dft) == -1:
+                continue
+            if int(dft) == 999999:
+                tem_pontual = True
                 continue
             dft_id = str(int(dft))
             ms_str = pd.to_datetime(row.get("DFT_BugfixMilestone"), errors="coerce")
             ms_fmt = ms_str.strftime("%d/%m/%Y") if not pd.isna(ms_str) else "s/ data"
             phase  = str(row.get("DFT_Phase", "") or "").strip() or "s/ status"
             pares[dft_id] = (ms_fmt, phase)
-        if not pares:
-            return ""
-        return " | ".join(f"DFT{k} · {ms} · {ph}" for k, (ms, ph) in sorted(pares.items()))
+        partes = [f"DFT{k} · {ms} · {ph}" for k, (ms, ph) in sorted(pares.items())]
+        if tem_pontual:
+            partes.append("Falha Pontual")
+        return " | ".join(partes)
 
     dfts_por_erro = (
         df_err.groupby("ErrorHandled__c", dropna=False)
