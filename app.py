@@ -207,6 +207,14 @@ with col_jornada:
     jornada_escolhida = st.selectbox("Jornada", options=jornadas,
                                       index=jornadas.index("Base Móvel") if "Base Móvel" in jornadas else 0)
 
+with st.sidebar:
+    st.markdown("### Dados")
+    if st.button("🔄 Atualizar dados do Drive"):
+        st.cache_data.clear()
+        st.success("Cache limpo. Recarregando dados mais recentes...")
+        st.rerun()
+    st.caption("Os dados são cacheados por até 30 min. Use o botão acima após atualizar os arquivos no Drive.")
+
 df, resumo = carregar_dados(jornada_escolhida)
 meses_disp = sorted(df["Mes"].unique().tolist())
 mes_labels = {m: f"{MESES_PT[m]}-26" for m in meses_disp}
