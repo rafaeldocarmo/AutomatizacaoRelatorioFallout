@@ -14,6 +14,9 @@ import matplotlib.ticker as mticker
 from pptx import Presentation
 from pptx.util import Inches, Pt
 from pptx.enum.text import PP_ALIGN
+from pptx.enum.shapes import MSO_CONNECTOR
+from pptx.enum.dml import MSO_LINE_DASH_STYLE
+from pptx.dml.color import RGBColor
 
 from gerar_pptx import (RED, WHITE, GRAY, GRAY2, FG,
                         _cell, _widths, _rowh, _no_style, _sem_bordas, _borda_clara)
@@ -26,6 +29,8 @@ COLUNAS = [("Consolidado",       "Consolidado"),
 COR_BLUE  = "#1565C0"
 COR_GRAYL = "#B0B0B0"
 COR_BRANCO = "#FFFFFF"
+COR_SEP   = "#DCDCDC"          # separador entre colunas (cinza esbranquiçado)
+RGB_SEP   = RGBColor(0xDC, 0xDC, 0xDC)
 
 
 # ── Extração ────────────────────────────────────────────────────────────────
@@ -169,6 +174,16 @@ def gerar_slide3col(base_dir=".", dados=None):
         gf = slide.shapes.add_table(nr, nc, Inches(x), Inches(y), Inches(w), Inches(h))
         _no_style(gf.table); return gf.table
 
+    # Separadores pontilhados entre as colunas
+    for ci in (1, 2):
+        xs = XS[ci] - GAP/2
+        cn = slide.shapes.add_connector(MSO_CONNECTOR.STRAIGHT,
+                                        Inches(xs), Inches(0.60),
+                                        Inches(xs), Inches(Y_FUNDO))
+        cn.line.color.rgb = RGB_SEP
+        cn.line.width = Pt(1)
+        cn.line.dash_style = MSO_LINE_DASH_STYLE.DASH
+
     for ci, (jornada, titulo) in enumerate(COLUNAS):
         d = dados[jornada]; x0 = XS[ci]
 
@@ -291,8 +306,8 @@ def gerar_slide3col_png(base_dir=".", dados=None):
     for ci, (jornada, titulo) in enumerate(COLUNAS):
         d = dados[jornada]; x0 = XS[ci]
         if ci > 0:
-            ax.plot([x0 - GAP/2, x0 - GAP/2], [0.15, 8.30], color="#BBBBBB",
-                    linewidth=1, linestyle=(0, (4, 4)))
+            ax.plot([x0 - GAP/2, x0 - GAP/2], [0.15, 8.30], color=COR_SEP,
+                    linewidth=1.2, linestyle=(0, (4, 4)))
         ax.text(x0 + CW/2, 8.22, titulo, ha="center", va="center",
                 fontsize=14.5, fontweight="bold", color=COR_FG)
 
