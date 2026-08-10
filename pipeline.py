@@ -351,12 +351,16 @@ FASES_MOPS      = {"Cancelado", "Rejeitado"}
 _corrigido     = df_mes["DFT_Phase"].fillna("").str.strip().isin(FASES_CORRIGIDO)
 _tem_milestone = df_mes["DFT_BugfixMilestone"].notna()
 _outros_mask   = df_mes["DefectNumber_orig"].str.strip().str.lower() == "enviado e-mail - outros times"
+_erro_proc_mask = df_mes["DefectNumber_orig"].str.strip().str.lower() == "erro de processo"
 
 # Falha Pontual
 pontual = df_mes[df_mes["DefectNumber__c"] == 999999]
 
 # Em avaliação - Outros times: DefectNumber_orig é "Enviado e-mail - Outros Times"
 outros_times = df_mes[_outros_mask]
+
+# Falha no Processo Usuário: DefectNumber_orig é "Erro de Processo"
+erro_processo = df_mes[_erro_proc_mask]
 
 # Em Avaliação por MOPs: DFT real com phase Cancelado ou Rejeitado
 mops = df_mes[
@@ -415,10 +419,10 @@ planejado    = em_trat[em_trat["DFT_BugfixMilestone"].notna()]
 us_sem_data  = em_trat[em_trat["DFT_BugfixMilestone"].isna() & (em_trat["DFT_Type"].fillna("").str.strip() == "User Story")]
 dft_sem_data = em_trat[em_trat["DFT_BugfixMilestone"].isna() & (em_trat["DFT_Type"].fillna("").str.strip() != "User Story")]
 
-# Falta associar: sem DFT real, e não é "outros times"
+# Falta associar: sem DFT real, e não é "outros times" nem "erro de processo"
 falta_assoc = df_mes[
     (df_mes["DefectNumber__c"].isna() | (df_mes["DefectNumber__c"] == -1)) &
-    ~_outros_mask
+    ~_outros_mask & ~_erro_proc_mask
 ]
 
 # Planejamento de Redução: DFTs com milestone futuro (pro-rate por dia de entrega)
@@ -463,15 +467,16 @@ reducao = (
 reducao["Pct"] = reducao["Pct_plena"]
 
 # ── Verificação de cobertura ──────────────────────────────────────────────────
-soma = len(em_trat) + len(resolvido) + len(pontual) + len(falta_assoc) + len(tratado) + len(mops) + len(outros_times)
+soma = len(em_trat) + len(resolvido) + len(pontual) + len(falta_assoc) + len(tratado) + len(mops) + len(outros_times) + len(erro_processo)
 print(f"\nDistribuição Fallout {MESES_LABEL[mes_atual]} ({fallout_pct:.2f}%)")
 print(f"  Em Tratamento          {pct(len(em_trat)):.2f}%  (Planej:{pct(len(planejado)):.2f}% | US s/data:{pct(len(us_sem_data)):.2f}% | DFT s/data:{pct(len(dft_sem_data)):.2f}%)")
 print(f"  Resolvido              {pct(len(resolvido)):.2f}%")
 print(f"  Falha Pontual          {pct(len(pontual)):.2f}%")
 print(f"  Falta associar         {pct(len(falta_assoc)):.2f}%")
-print(f"  Em avaliação eficácia  {pct(len(tratado)):.2f}%")
+print(f"  Tratado - eficácia     {pct(len(tratado)):.2f}%")
 print(f"  Em Avaliação MOPs      {pct(len(mops)):.2f}%")
 print(f"  Outros times           {pct(len(outros_times)):.2f}%")
+print(f"  Falha Processo Usuário {pct(len(erro_processo)):.2f}%")
 print(f"  Total categorizado: {soma}/{len(df_mes)}")
 
 # ── Tabela visual de distribuição ────────────────────────────────────────────
@@ -491,9 +496,10 @@ dist_rows = [
     ("Resolvido",                                   f"{pct(len(resolvido)):.2f}%",       0, False),
     ("Falha Pontual",                               f"{pct(len(pontual)):.2f}%",         0, False),
     ("Falta associar problema ao Defeito/US",       f"{pct(len(falta_assoc)):.2f}%",     0, False),
-    ("Em avaliação de eficácia",                    f"{pct(len(tratado)):.2f}%",         0, False),
+    ("Tratado - Em avaliação de eficácia",          f"{pct(len(tratado)):.2f}%",         0, False),
     ("Em Avaliação por MOPs",                       f"{pct(len(mops)):.2f}%",            0, False),
     ("Em avaliação - Outros times",                 f"{pct(len(outros_times)):.2f}%",    0, False),
+    ("Falha no Processo Usuário",                   f"{pct(len(erro_processo)):.2f}%",   0, False),
     (f"Planejamento Redução ({reducao['Pct_plena'].sum():.2f}% pleno)", "",                        0, True),
 ]
 for _, r in reducao.iterrows():
@@ -974,9 +980,10 @@ dist_items = [
     ("Resolvido",                             pct(len(resolvido)),     False, False),
     ("Falha Pontual",                         pct(len(pontual)),       False, False),
     ("Falta associar problema ao Defeito/US", pct(len(falta_assoc)),   False, False),
-    ("Em avaliação de eficácia",              pct(len(tratado)),       False, False),
+    ("Tratado - Em avaliação de eficácia",    pct(len(tratado)),       False, False),
     ("Em Avaliação por MOPs",                 pct(len(mops)),          False, False),
     ("Em avaliação - Outros times",           pct(len(outros_times)),  False, False),
+    ("Falha no Processo Usuário",             pct(len(erro_processo)), False, False),
 ]
 toggle = False
 for label, val, subitem, bold_label in dist_items:

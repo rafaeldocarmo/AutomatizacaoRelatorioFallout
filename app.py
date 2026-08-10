@@ -161,6 +161,7 @@ def categorizar(df, mes):
     _tem_ms       = df_mes["DFT_BugfixMilestone"].notna()
     _encerrado    = _corrigido & _tem_ms & (milestone_dt <= hoje)
     _outros_mask  = df_mes["DefectNumber_orig"].str.strip().str.lower() == "enviado e-mail - outros times"
+    _erro_proc_mask = df_mes["DefectNumber_orig"].str.strip().str.lower() == "erro de processo"
 
     cats = {
         "Em Tratamento/Avaliação pela Squad": df_mes[
@@ -174,9 +175,9 @@ def categorizar(df, mes):
         "Falha Pontual": df_mes[df_mes["DefectNumber__c"] == 999999],
         "Falta Associar ao Defeito/US": df_mes[
             (df_mes["DefectNumber__c"].isna() | (df_mes["DefectNumber__c"] == -1)) &
-            ~_outros_mask
+            ~_outros_mask & ~_erro_proc_mask
         ],
-        "Em avaliação de eficácia": df_mes[
+        "Tratado - Em avaliação de eficácia": df_mes[
             _corrigido & _tem_ms & (milestone_dt >= quinze_dias) & (milestone_dt <= hoje)
         ],
         "Em Avaliação por MOPs": df_mes[
@@ -185,6 +186,7 @@ def categorizar(df, mes):
             df_mes["DFT_Phase"].fillna("").str.strip().isin(FASES_MOPS)
         ],
         "Em avaliação - Outros times": df_mes[_outros_mask],
+        "Falha no Processo Usuário": df_mes[_erro_proc_mask],
     }
     total = len(df_mes)
     return df_mes, cats, total
