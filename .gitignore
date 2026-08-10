@@ -3,6 +3,7 @@ extrações/
 *.png
 *.pdf
 *.zip
+*.pptx
 __pycache__/
 .env
 *.json

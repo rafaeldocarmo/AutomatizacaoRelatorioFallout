@@ -313,8 +313,22 @@ with aba_consolidado:
           if (fsImg.complete) fsFit();
         </script>
         """, height=900)
-        st.download_button("⬇ Baixar PNG", data=img_bytes,
-                           file_name=f"dashboard_{_nome_dash}.png", mime="image/png")
+        col_dl1, col_dl2 = st.columns(2)
+        with col_dl1:
+            st.download_button("⬇ Baixar PNG", data=img_bytes,
+                               file_name=f"dashboard_{_nome_dash}.png", mime="image/png")
+        with col_dl2:
+            if st.button("📊 Gerar PowerPoint editável"):
+                from gerar_pptx import gerar_pptx
+                with st.spinner("Gerando PowerPoint..."):
+                    buf = gerar_pptx(jornada_escolhida, _data_dir)
+                st.session_state["pptx_bytes"] = buf.getvalue()
+                st.session_state["pptx_name"]  = f"relatorio_{_nome_dash}.pptx"
+            if st.session_state.get("pptx_bytes") and st.session_state.get("pptx_name") == f"relatorio_{_nome_dash}.pptx":
+                st.download_button(
+                    "⬇ Baixar PowerPoint", data=st.session_state["pptx_bytes"],
+                    file_name=st.session_state["pptx_name"],
+                    mime="application/vnd.openxmlformats-officedocument.presentationml.presentation")
     else:
         st.warning("Dashboard não encontrado. Clique em **Gerar relatório** acima.")
 

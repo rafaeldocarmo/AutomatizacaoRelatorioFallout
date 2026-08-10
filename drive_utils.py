@@ -57,12 +57,16 @@ def _service():
 
 
 def drive_configurado():
-    """Retorna True se as credenciais do Drive estão presentes."""
+    """Retorna True se as credenciais do Drive E o folder_id estão presentes.
+    Sem folder_id (ex.: ambiente local) cai de volta para os arquivos locais."""
     try:
-        key = st.secrets["google"].get("client_email", "")
+        g = st.secrets["google"]
+        key = g.get("client_email", "")
+        fid = g.get("folder_id", "")
     except Exception:
         key = os.environ.get("GDRIVE_CLIENT_EMAIL", "")
-    return bool(key)
+        fid = os.environ.get("GDRIVE_FOLDER_ID", "")
+    return bool(key) and bool(fid)
 
 
 def _listar_pasta(service, parent_id):
