@@ -153,8 +153,10 @@ def gerar_slide3col(base_dir="."):
 
     max_lin = max(n_linhas(ci, dados[j]) for ci, (j, _) in enumerate(COLUNAS))
     RH = min(0.20, (Y_FUNDO - Y_TAB - 2*GAP_BL) / max_lin)
-    FD = 6.5 if RH >= 0.16 else (6.0 if RH >= 0.13 else 5.4)   # dados
-    FT = 8.0 if RH >= 0.16 else (7.2 if RH >= 0.13 else 6.6)   # títulos
+    # Fontes conforme a altura de linha (RH em pt = RH*72; a linha ocupa ~1.2*fonte)
+    if RH >= 0.16:   FD, FT = 8.0, 9.0     # dados, títulos
+    elif RH >= 0.13: FD, FT = 7.0, 8.0
+    else:            FD, FT = 6.0, 7.0
 
     tmp = tempfile.mkdtemp(prefix="slide3col_")
 
