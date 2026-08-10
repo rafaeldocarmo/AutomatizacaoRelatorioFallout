@@ -352,15 +352,24 @@ with aba_consolidado:
     st.markdown("---")
     st.markdown("**Slide executivo — Consolidado | Prospect | Base + Cross Sell**")
     if st.button("🗂 Gerar slide de 3 colunas"):
-        from gerar_slide3col import gerar_slide3col
+        from gerar_slide3col import extrair_todas, gerar_slide3col, gerar_slide3col_png
         with st.spinner("Gerando slide de 3 colunas..."):
-            buf3 = gerar_slide3col(_data_dir)
-        st.session_state["s3col_bytes"] = buf3.getvalue()
-    if st.session_state.get("s3col_bytes"):
-        st.download_button(
-            "⬇ Baixar slide (PowerPoint)", data=st.session_state["s3col_bytes"],
-            file_name="slide_3colunas.pptx",
-            mime="application/vnd.openxmlformats-officedocument.presentationml.presentation")
+            _d3 = extrair_todas(_data_dir)          # roda o pipeline uma só vez
+            st.session_state["s3col_bytes"] = gerar_slide3col(dados=_d3).getvalue()
+            st.session_state["s3col_png"]   = gerar_slide3col_png(dados=_d3).getvalue()
+
+    if st.session_state.get("s3col_png"):
+        st.image(st.session_state["s3col_png"], use_container_width=True)
+        _c1, _c2 = st.columns(2)
+        with _c1:
+            st.download_button(
+                "⬇ Baixar slide (PNG)", data=st.session_state["s3col_png"],
+                file_name="slide_3colunas.png", mime="image/png")
+        with _c2:
+            st.download_button(
+                "⬇ Baixar slide (PowerPoint)", data=st.session_state["s3col_bytes"],
+                file_name="slide_3colunas.pptx",
+                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation")
 
 with aba_distribuicao:
     st.subheader(f"Distribuição Fallout — {mes_labels[mes_escolhido]}")
