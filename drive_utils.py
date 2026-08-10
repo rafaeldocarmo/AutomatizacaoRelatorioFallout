@@ -2,14 +2,15 @@
 Utilitários para leitura de arquivos do Google Drive via Service Account.
 
 Estrutura esperada no Drive (dentro da pasta raiz GDRIVE_FOLDER_ID):
-  Base Móvel/
-    falhas/    ← CSVs de falhas
-    sucessos/  ← CSVs de sucessos
-  Cross Sell/
-    falhas/
-    sucessos/
+  <Jornada>/          ← ex.: Base Móvel, Cross Sell, Prospect
+    falhas/           ← CSVs de falhas
+    sucessos/         ← CSVs de sucessos
   RelatorioDFTOctane.xlsx
   RelatorioUSOctane.xlsx
+
+As jornadas são descobertas dinamicamente: qualquer pasta da raiz que contenha
+uma subpasta "falhas" é baixada. Para adicionar uma nova jornada, basta criar a
+pasta no Drive — nenhuma alteração de código é necessária.
 
 Variáveis de ambiente / secrets necessários:
   GDRIVE_FOLDER_ID      → ID da pasta raiz no Drive
@@ -127,14 +128,6 @@ def baixar_arquivos_drive():
         )
         st.stop()
 
-    _esperado = {"Base Móvel", "Cross Sell"}
-    if not (_esperado & set(raiz.keys())):
-        st.error(
-            "Nenhuma pasta de jornada encontrada no Drive. "
-            f"Esperado: {sorted(_esperado)}. Encontrado na pasta raiz: {sorted(raiz.keys())}"
-        )
-        st.stop()
-
     tmp = tempfile.mkdtemp(prefix="mayh_drive_")
 
     # Excel do Octane
@@ -146,16 +139,26 @@ def baixar_arquivos_drive():
                 with open(dest, "wb") as f:
                     f.write(dados.read())
 
-    # Pastas de jornadas
-    for jornada in ["Base Móvel", "Cross Sell"]:
-        if jornada not in raiz:
+    # Pastas de jornadas: qualquer pasta da raiz que contenha "falhas"
+    _baixadas = []
+    for jornada, meta in raiz.items():
+        if meta["mimeType"] != "application/vnd.google-apps.folder":
             continue
-        jornada_id = raiz[jornada]["id"]
-        sub = _listar_pasta(svc, jornada_id)
-        for subpasta in ["falhas", "sucessos"]:
+        sub = _listar_pasta(svc, meta["id"])
+        if "falhas" not in sub:
+            continue
+        for subpasta in ("falhas", "sucessos"):
             if subpasta not in sub:
                 continue
             dest_dir = os.path.join(tmp, "extrações", jornada, subpasta)
             _baixar_pasta_para_temp(svc, sub[subpasta]["id"], dest_dir)
+        _baixadas.append(jornada)
+
+    if not _baixadas:
+        st.error(
+            "Nenhuma pasta de jornada encontrada no Drive (é preciso uma pasta com "
+            f"subpasta 'falhas'). Encontrado na raiz: {sorted(raiz.keys())}"
+        )
+        st.stop()
 
     return tmp

@@ -1115,7 +1115,6 @@ if len(proj_labels) > 1:
 todas_labels = labels_hist + proj_labels[1:]
 ax_chart.axhline(y=1, color=COR_BLUE, linewidth=1.5, label="Meta (1%)")
 
-ax_chart.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x:.0f}%"))
 ax_chart.grid(axis="y", linestyle="--", alpha=0.3)
 
 # Reserva espaço no topo para a legenda não sobrepor os dados
@@ -1123,6 +1122,12 @@ _todos_vals = vals_hist + proj_vals + expect_vals
 _ymin, _ymax = ax_chart.get_ylim()
 _data_max = max(_todos_vals) if _todos_vals else _ymax
 ax_chart.set_ylim(_ymin, max(_ymax, _data_max) * 1.18)
+
+# Rótulos do eixo Y: usa decimal quando a faixa é estreita (senão repete "2%")
+_yr = ax_chart.get_ylim()[1] - ax_chart.get_ylim()[0]
+_dec = 0 if _yr >= 5 else 1
+ax_chart.yaxis.set_major_formatter(
+    mticker.FuncFormatter(lambda x, _: f"{x:.{_dec}f}%".replace(".", ",")))
 
 ax_chart.legend(fontsize=7, loc="upper right", framealpha=0.9, edgecolor="none")
 ax_chart.set_xticks(range(len(todas_labels)))
