@@ -265,10 +265,12 @@ with aba_consolidado:
     if st.button(f"🔄 Gerar relatório — {jornada_escolhida}"):
         import subprocess, sys
         with st.spinner(f"Gerando dashboard de {jornada_escolhida}..."):
+            _env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
             _res = subprocess.run(
                 [sys.executable, os.path.join(_app_dir, "pipeline.py"), jornada_escolhida],
                 cwd=_data_dir,               # dados (extrações/ + xlsx) ficam aqui
                 capture_output=True, text=True,
+                encoding="utf-8", errors="replace", env=_env,
             )
         if _res.returncode == 0:
             st.success("Relatório gerado com sucesso!")
