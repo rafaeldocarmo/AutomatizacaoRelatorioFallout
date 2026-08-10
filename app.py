@@ -449,9 +449,10 @@ with aba_distribuicao:
         )
 
 with aba_erros:
-    st.subheader(f"Análise de Erros — {jornada_escolhida} | {mes_labels[mes_escolhido]}")
+    st.subheader(f"Análise de Erros — {jornada_escolhida}")
 
-    df_err = df_mes.copy()
+    # Usa todo o histórico (não só o mês selecionado); o período é escolhido abaixo
+    df_err = df.copy()
     df_err["ErrorHandled__c"] = df_err["ErrorHandled__c"].fillna("(sem mensagem de erro)")
     _orig_lower = df_err["DefectNumber_orig"].astype(str).str.strip().str.lower()
     df_err["_outros_times"] = _orig_lower == "enviado e-mail - outros times"
@@ -464,19 +465,25 @@ with aba_erros:
     )
     df_err["Data"] = df_err["CreatedDate"].dt.tz_convert("America/Sao_Paulo").dt.date
 
-    # ── Filtro de datas ────────────────────────────────────────────────────────
+    # ── Filtro de datas (todo o histórico disponível) ──────────────────────────
     datas_disp = sorted(df_err["Data"].dropna().unique())
     if datas_disp:
-        col_d1, col_d2, col_f1, col_f2 = st.columns([1.5, 1.5, 3, 1.5])
+        # padrão = mês selecionado no topo, mas dá para ampliar até o histórico todo
+        _dm = [d for d in datas_disp if d.month == mes_escolhido]
+        _ini_pad = _dm[0]  if _dm else datas_disp[0]
+        _fim_pad = _dm[-1] if _dm else datas_disp[-1]
+        col_d1, col_d2, col_g, col_f1, col_f2 = st.columns([1.4, 1.4, 1.2, 2.6, 1.4])
         with col_d1:
-            dt_ini = st.date_input("Data início", value=datas_disp[0],
+            dt_ini = st.date_input("Data início", value=_ini_pad,
                                    min_value=datas_disp[0], max_value=datas_disp[-1])
         with col_d2:
-            dt_fim = st.date_input("Data fim", value=datas_disp[-1],
+            dt_fim = st.date_input("Data fim", value=_fim_pad,
                                    min_value=datas_disp[0], max_value=datas_disp[-1])
+        with col_g:
+            agrupar = st.selectbox("Colunas por", ["Dia", "Mês"])
     else:
         col_f1, col_f2 = st.columns([3, 1.5])
-        dt_ini, dt_fim = None, None
+        dt_ini, dt_fim, agrupar = None, None, "Dia"
 
     # ── Filtros de texto e DFT ─────────────────────────────────────────────────
     with col_f1:
@@ -489,6 +496,12 @@ with aba_erros:
 
     if dt_ini and dt_fim:
         df_err = df_err[(df_err["Data"] >= dt_ini) & (df_err["Data"] <= dt_fim)]
+
+    # Denominador do "% do Total": soma dos meses cobertos pelo período escolhido
+    _meses_sel = sorted({d.month for d in df_err["Data"].dropna().unique()})
+    _total_per = int(sum(resumo.loc[m, "Total"] for m in _meses_sel if m in resumo.index))
+    _total_per = _total_per or 1
+
     if busca:
         df_err = df_err[df_err["ErrorHandled__c"].str.contains(busca, case=False, na=False)]
     if filtro_dft == "Com DFT":
@@ -500,22 +513,31 @@ with aba_erros:
     elif filtro_dft == "Outros Times":
         df_err = df_err[df_err["_outros_times"]]
 
-    # ── Pivot por dia ─────────────────────────────────────────────────────────
+    # ── Pivot por dia ou por mês ──────────────────────────────────────────────
+    if agrupar == "Mês":
+        _per = (df_err["CreatedDate"].dt.tz_convert("America/Sao_Paulo")
+                .dt.tz_localize(None).dt.to_period("M"))   # naive: evita warning do pandas
+        df_err = df_err.assign(_grp=_per)
+        _fmt_col = lambda p: f"{MESES_PT[p.month]}-{str(p.year)[-2:]}"
+    else:
+        df_err = df_err.assign(_grp=df_err["Data"])
+        _fmt_col = lambda d: d.strftime("%d/%m/%Y")
+
     pivot_erros = (
-        df_err.groupby(["ErrorHandled__c", "Data"], dropna=False)
+        df_err.groupby(["ErrorHandled__c", "_grp"], dropna=False)
         .size()
-        .unstack("Data", fill_value=0)
+        .unstack("_grp", fill_value=0)
         .reset_index()
     )
     pivot_erros.columns.name = None
 
-    day_cols_raw = [c for c in pivot_erros.columns if c != "ErrorHandled__c"]
-    rename_map   = {c: c.strftime("%d/%m/%Y") for c in day_cols_raw}
+    day_cols_raw = sorted(c for c in pivot_erros.columns if c != "ErrorHandled__c")
+    rename_map   = {c: _fmt_col(c) for c in day_cols_raw}
     pivot_erros  = pivot_erros.rename(columns=rename_map)
     day_col_strs = [rename_map[c] for c in day_cols_raw]
 
     pivot_erros["Total Geral"] = pivot_erros[day_col_strs].sum(axis=1)
-    pivot_erros["% do Total"]  = (pivot_erros["Total Geral"] / total_mes * 100).round(2)
+    pivot_erros["% do Total"]  = (pivot_erros["Total Geral"] / _total_per * 100).round(2)
     pivot_erros = pivot_erros.sort_values("Total Geral", ascending=False)
 
     # ── DFTs por mensagem de erro ──────────────────────────────────────────────
@@ -555,7 +577,18 @@ with aba_erros:
     pivot_erros["DFTs"] = pivot_erros["DFTs"].replace("", "—").fillna("—")
     pivot_erros = pivot_erros.rename(columns={"ErrorHandled__c": "Mensagem de Erro"})
 
-    st.markdown(f"**{len(pivot_erros):,} tipos de erro** | **{int(pivot_erros['Total Geral'].sum()):,} ocorrências**")
+    _per_txt = f"{dt_ini.strftime('%d/%m/%Y')} a {dt_fim.strftime('%d/%m/%Y')}" if dt_ini else "—"
+    _meses_txt = ", ".join(mes_labels.get(m, str(m)) for m in _meses_sel)
+    st.markdown(
+        f"**{len(pivot_erros):,} tipos de erro** | "
+        f"**{int(pivot_erros['Total Geral'].sum()):,} ocorrências** | "
+        f"Período: **{_per_txt}**"
+    )
+    st.caption(f"% do Total calculado sobre {_total_per:,} pedidos ({_meses_txt}). "
+               "Meses parciais usam o total do mês inteiro.".replace(",", "."))
+    if agrupar == "Dia" and len(day_col_strs) > 62:
+        st.warning(f"O período tem {len(day_col_strs)} dias — troque **Colunas por** para "
+                   "**Mês** para uma leitura mais confortável.")
 
     col_order  = ["Mensagem de Erro"] + day_col_strs + ["Total Geral", "% do Total", "DFTs"]
     col_config = {
@@ -595,7 +628,9 @@ with aba_erros:
     st.download_button(
         label="⬇ Baixar Excel",
         data=excel_erros,
-        file_name=f"erros_{jornada_escolhida}_{mes_labels[mes_escolhido]}.xlsx",
+        file_name=(f"erros_{jornada_escolhida}_"
+                   f"{dt_ini.strftime('%Y%m%d')}-{dt_fim.strftime('%Y%m%d')}.xlsx"
+                   if dt_ini else f"erros_{jornada_escolhida}.xlsx"),
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
