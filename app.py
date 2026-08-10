@@ -346,6 +346,20 @@ with aba_consolidado:
     else:
         st.warning("Dashboard não encontrado. Clique em **Gerar relatório** acima.")
 
+    # ── Slide executivo de 3 colunas (independe da jornada selecionada) ───────
+    st.markdown("---")
+    st.markdown("**Slide executivo — Consolidado | Prospect | Base + Cross Sell**")
+    if st.button("🗂 Gerar slide de 3 colunas"):
+        from gerar_slide3col import gerar_slide3col
+        with st.spinner("Gerando slide de 3 colunas..."):
+            buf3 = gerar_slide3col(_data_dir)
+        st.session_state["s3col_bytes"] = buf3.getvalue()
+    if st.session_state.get("s3col_bytes"):
+        st.download_button(
+            "⬇ Baixar slide (PowerPoint)", data=st.session_state["s3col_bytes"],
+            file_name="slide_3colunas.pptx",
+            mime="application/vnd.openxmlformats-officedocument.presentationml.presentation")
+
 with aba_distribuicao:
     st.subheader(f"Distribuição Fallout — {mes_labels[mes_escolhido]}")
 
