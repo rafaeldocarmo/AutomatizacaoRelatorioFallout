@@ -10,12 +10,32 @@ import glob, os, sys
 
 # Jornada: pode ser passada como argumento ou usa "Base Móvel" como padrão
 # Uso: python pipeline.py "Base Móvel"   ou   python pipeline.py "Cross Sell"
+# Uso: python pipeline.py "Consolidado"  → combina TODAS as jornadas disponíveis
 # Uso: python pipeline.py "Base Móvel" [mes_numero]
 # Ex:  python pipeline.py "Base Móvel" 5   → gera dashboard do mês 5 (maio)
 JORNADA = sys.argv[1] if len(sys.argv) > 1 else "Base Móvel"
 
-# "Base + Cross Sell" combina as duas jornadas
-JORNADAS_COMBO = ["Base Móvel", "Cross Sell"] if JORNADA == "Base + Cross Sell" else [JORNADA]
+
+def jornadas_disponiveis(raiz="extrações"):
+    """Pastas de jornada existentes (as que têm subpasta 'falhas')."""
+    if not os.path.isdir(raiz):
+        return []
+    return sorted(d for d in os.listdir(raiz)
+                  if os.path.isdir(os.path.join(raiz, d, "falhas")))
+
+
+def resolver_jornadas(jornada, raiz="extrações"):
+    """Traduz o nome escolhido nas pastas que devem ser lidas."""
+    if jornada == "Consolidado":
+        return jornadas_disponiveis(raiz)
+    if jornada == "Base + Cross Sell":
+        return ["Base Móvel", "Cross Sell"]
+    return [jornada]
+
+
+JORNADAS_COMBO = resolver_jornadas(JORNADA)
+if not JORNADAS_COMBO:
+    raise FileNotFoundError("Nenhuma pasta de jornada encontrada em extrações/")
 print(f"Jornada: {JORNADA}  |  Pastas: {', '.join(JORNADAS_COMBO)}")
 
 # Convenção de nome: extrações/<Jornada>/falhas/RelatorioDeFalhas_jan26.csv
@@ -1142,11 +1162,15 @@ ax_chart.text(0.99, 1.04, f"Data de Corte: {data_corte.strftime('%d/%b')}",
 ax_table.set_xlim(0, sum(COL_W))
 ax_table.set_ylim(0, fig_h)
 
+# A área da tabela tem altura fixa no slide: quanto mais linhas, menor cada uma.
+# Escala as fontes junto para o texto não invadir a linha vizinha.
+_FS = max(0.55, min(1.0, 16.0 / max(n_data, 1)))
+
 y_t = fig_h - HDR_H
 for ci, col in enumerate(COL_NAMES):
     x = X[ci]; w = sum(COL_W[ci:ci+1])
     ax_table.add_patch(plt.Rectangle((x, y_t), w, HDR_H, facecolor=COR_HDR, edgecolor="#FFFFFF", linewidth=0.5))
-    ax_table.text(x + w/2, y_t + HDR_H/2, col, ha="center", va="center", fontsize=6.5,
+    ax_table.text(x + w/2, y_t + HDR_H/2, col, ha="center", va="center", fontsize=6.5*_FS,
                   color="#FFFFFF", fontweight="bold", multialignment="center")
 
 def tcell(ci, y, h, text, bg, fg=COR_FG2, bold=False, fs=6, align="center", span=1):
@@ -1155,7 +1179,7 @@ def tcell(ci, y, h, text, bg, fg=COR_FG2, bold=False, fs=6, align="center", span
     if not text: return
     ha = "left" if align == "left" else "center"
     xt = x + 0.1 if align == "left" else x + w / 2
-    ax_table.text(xt, y + h / 2, str(text), ha=ha, va="center", fontsize=fs,
+    ax_table.text(xt, y + h / 2, str(text), ha=ha, va="center", fontsize=fs*_FS,
                   color=fg, fontweight="bold" if bold else "normal",
                   multialignment=ha, clip_on=True)
 

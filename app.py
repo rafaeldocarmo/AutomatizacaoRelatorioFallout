@@ -27,21 +27,35 @@ def _base_dir():
         return baixar_arquivos_drive()
     return os.path.dirname(os.path.abspath(__file__))
 
-def listar_jornadas():
-    pasta_extracoes = os.path.join(_base_dir(), "extrações")
-    jornadas = [
+def _jornadas_em(base):
+    """Pastas de jornada existentes (as que têm subpasta 'falhas')."""
+    pasta_extracoes = os.path.join(base, "extrações")
+    return sorted(
         d for d in os.listdir(pasta_extracoes)
         if os.path.isdir(os.path.join(pasta_extracoes, d, "falhas"))
-    ]
-    jornadas = sorted(jornadas)
+    )
+
+def _resolver_jornadas(jornada, base):
+    """Traduz o nome escolhido nas pastas que devem ser lidas."""
+    if jornada == "Consolidado":
+        return _jornadas_em(base)
+    if jornada == "Base + Cross Sell":
+        return ["Base Móvel", "Cross Sell"]
+    return [jornada]
+
+def listar_jornadas():
+    jornadas = _jornadas_em(_base_dir())
+    opcoes = list(jornadas)
     if "Base Móvel" in jornadas and "Cross Sell" in jornadas:
-        jornadas.append("Base + Cross Sell")
-    return jornadas
+        opcoes.append("Base + Cross Sell")
+    if len(jornadas) > 1:
+        opcoes.append("Consolidado")   # todas as jornadas juntas
+    return opcoes
 
 @st.cache_data(show_spinner="Carregando dados...")
 def carregar_dados(jornada: str):
     base = _base_dir()
-    jornadas_combo = ["Base Móvel", "Cross Sell"] if jornada == "Base + Cross Sell" else [jornada]
+    jornadas_combo = _resolver_jornadas(jornada, base)
 
     arquivos_falhas = []
     for _j in jornadas_combo:
