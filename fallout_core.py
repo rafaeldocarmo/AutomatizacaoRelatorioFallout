@@ -98,9 +98,23 @@ def carregar_base(base_dir, jornada):
     df_falhas["CreatedDate"] = pd.to_datetime(df_falhas["CreatedDate"], utc=True, errors="coerce")
     df_falhas = df_falhas.rename(columns=RENAME_FALHAS)
 
-    df_falhas["DefectNumber_orig"] = df_falhas["DefectNumber__c"].astype(str).str.strip()
+    # O export do CRM às vezes traz o número do defeito com espaços não-quebráveis
+    # no fim (ex.: "233538\xa0\xa0"). Sem limpar, pd.to_numeric devolve NaN e o
+    # pedido acaba contado como "Falta Associar ao Defeito/US" mesmo tendo DFT.
+    df_falhas["DefectNumber_orig"] = (
+        df_falhas["DefectNumber__c"].astype(str)
+        .str.replace("\xa0", " ", regex=False)
+        .str.strip()
+    )
+    # Alguns registros vêm com o prefixo do próprio sistema ("DFT 232143"). Só o
+    # prefixo DFT é removido: INC-, DDP-, PDST- e OS referenciam outros sistemas,
+    # não existem no Octane e devem continuar sem defeito associado.
     df_falhas["DefectNumber__c"] = (
-        pd.to_numeric(df_falhas["DefectNumber__c"], errors="coerce")
+        pd.to_numeric(
+            df_falhas["DefectNumber_orig"].str.replace(
+                r"^DFT\s*(?=\d)", "", regex=True, case=False),
+            errors="coerce",
+        )
         .fillna(-1).astype(int)
     )
 
@@ -144,9 +158,21 @@ def carregar_base(base_dir, jornada):
 
     # ── Join falhas ← Octane ────────────────────────────────────────────
     df = df_falhas.merge(df_octane, on="DefectNumber__c", how="left")
+
+    # Desduplicar por OrderNumber mantendo a linha mais informativa:
+    #   1º) DFT real (número > 0);
+    #   2º) no empate entre linhas sem DFT (todas viram -1), vence a que tem
+    #       rótulo explícito ("Enviado e-mail - Outros Times", "Erro de
+    #       Processo", "INC-…") em vez da linha em branco.
+    # `kind="stable"` evita que o desempate mude de execução para execução — o
+    # quicksort padrão do pandas reordenava empates de forma arbitrária.
+    _sem_rotulo = df["DefectNumber_orig"].isin(["", "nan", "None", "-1"])
     df = (
-        df.sort_values("DefectNumber__c", ascending=False)   # DFT real primeiro
+        df.assign(_tem_rotulo=(~_sem_rotulo).astype(int))
+          .sort_values(["DefectNumber__c", "_tem_rotulo"],
+                       ascending=[False, False], kind="stable")
           .drop_duplicates(subset=["OrderNumber"])
+          .drop(columns="_tem_rotulo")
           .reset_index(drop=True)
     )
     df["Mes"] = df["CreatedDate"].dt.tz_convert("America/Sao_Paulo").dt.month
