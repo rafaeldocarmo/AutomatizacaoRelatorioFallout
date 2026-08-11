@@ -126,6 +126,60 @@ def _py(*args):
     subprocess.run([exe, *args], check=True)
 
 
+def _tamanho(caminho):
+    return sum(
+        os.path.getsize(os.path.join(r, a))
+        for r, _, arqs in os.walk(caminho) for a in arqs
+    )
+
+
+# Pacotes que só o instalador usa, ou que o Streamlit traz por dependência mas
+# este app não exercita. A remoção de altair/pydeck/narwhals foi verificada
+# rodando o app inteiro sem eles: as abas e as tabelas continuam funcionando.
+PACOTES_DESCARTAVEIS = [
+    "pip", "setuptools", "wheel", "pkg_resources",   # só servem para instalar
+    "altair", "pydeck", "narwhals",                  # gráficos nativos não usados
+]
+
+
+def _enxugar(remover_pyc):
+    """Tira do site-packages o que não é usado em tempo de execução."""
+    sp = os.path.join(PY_DIR, "Lib", "site-packages")
+    antes = _tamanho(PY_DIR)
+
+    for nome in PACOTES_DESCARTAVEIS:
+        for alvo in (os.path.join(sp, nome), *__import__("glob").glob(
+                os.path.join(sp, nome + "-*.dist-info"))):
+            if os.path.isdir(alvo):
+                shutil.rmtree(alvo, ignore_errors=True)
+
+    # Suítes de teste, headers e libs estáticas: nada disso roda.
+    for raiz, dirs, arqs in os.walk(sp, topdown=True):
+        for d in list(dirs):
+            if d in ("tests", "test", "testing", "include", "includes"):
+                shutil.rmtree(os.path.join(raiz, d), ignore_errors=True)
+                dirs.remove(d)
+        for a in arqs:
+            # .pyi = stubs de tipagem (só IDE); .lib/.a = compilar contra o Arrow
+            if a.endswith((".pyi", ".lib", ".a", ".pdb", ".chm")):
+                try:
+                    os.remove(os.path.join(raiz, a))
+                except OSError:
+                    pass
+
+    if remover_pyc:
+        # Trocam ~95 MB por alguns segundos a mais só na primeira abertura,
+        # já que o Python regrava os .pyc conforme importa.
+        for raiz, dirs, _ in os.walk(PY_DIR, topdown=True):
+            for d in list(dirs):
+                if d == "__pycache__":
+                    shutil.rmtree(os.path.join(raiz, d), ignore_errors=True)
+                    dirs.remove(d)
+
+    depois = _tamanho(PY_DIR)
+    print(f"  {(antes - depois) / 1024 / 1024:,.0f} MB removidos")
+
+
 def main():
     print(f"→ destino: {DIST}")
     if os.path.exists(DIST):
@@ -133,7 +187,7 @@ def main():
         shutil.rmtree(DIST)
     os.makedirs(PY_DIR, exist_ok=True)
 
-    print("\n[1/5] Python embeddable")
+    print("\n[1/6] Python embeddable")
     zip_local = _baixar(PY_URL, os.path.join(CACHE, PY_ZIP))
     with zipfile.ZipFile(zip_local) as z:
         z.extractall(PY_DIR)
@@ -151,14 +205,17 @@ def main():
         f.write("\n".join(linhas) + "\n")
     print(f"  site-packages habilitado em {pth}")
 
-    print("\n[2/5] pip")
+    print("\n[2/6] pip")
     get_pip = _baixar(GET_PIP_URL, os.path.join(CACHE, "get-pip.py"))
     _py(get_pip, "--no-warn-script-location")
 
-    print("\n[3/5] dependências (demora alguns minutos)")
+    print("\n[3/6] dependências (demora alguns minutos)")
     _py("-m", "pip", "install", "--no-warn-script-location", *DEPS)
 
-    print("\n[4/5] aplicação")
+    print("\n[4/6] enxugando")
+    _enxugar(remover_pyc="--com-pyc" not in sys.argv)
+
+    print("\n[5/6] aplicação")
     for nome in FONTES:
         shutil.copy2(os.path.join(RAIZ, nome), os.path.join(DIST, nome))
         print(f"  {nome}")
@@ -172,7 +229,7 @@ def main():
         os.makedirs(destino_dados, exist_ok=True)
         print("  extracoes/ (vazia — copie os dados para cá)")
 
-    print("\n[5/5] atalhos e leia-me")
+    print("\n[6/6] atalhos e leia-me")
     # cp1252: os .bat são lidos pelo cmd.exe, não por Python.
     for nome, conteudo in [
         ("Explorador de Fallout.bat", ATALHO),
@@ -182,8 +239,11 @@ def main():
         with open(os.path.join(DIST, nome), "w", encoding="cp1252") as f:
             f.write(conteudo)
         print(f"  {nome}")
-    with open(os.path.join(DIST, "LEIA-ME.txt"), "w", encoding="utf-8") as f:
+    # utf-8-sig: sem o BOM o Bloco de Notas do Windows lê como ANSI e os
+    # acentos viram "DÃª".
+    with open(os.path.join(DIST, "LEIA-ME.txt"), "w", encoding="utf-8-sig") as f:
         f.write(LEIAME)
+    print("  LEIA-ME.txt")
 
     tam = sum(
         os.path.getsize(os.path.join(r, a))
