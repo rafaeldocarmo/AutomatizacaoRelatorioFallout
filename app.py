@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import os
-from drive_utils import drive_configurado, baixar_arquivos_drive
 import fallout_core
 from fallout_core import MESES_PT
 
@@ -165,9 +164,7 @@ def _kpi_tile(label, valor, delta_txt, delta_up, serie, destaque, rodape=""):
 
 # ── Leitura de dados (cache) ──────────────────────────────────────────────────
 def _base_dir():
-    """Retorna o diretório base dos arquivos (Drive ou local)."""
-    if drive_configurado():
-        return baixar_arquivos_drive()
+    """Raiz do projeto — os dados ficam em `extracoes/` dentro dela."""
     return os.path.dirname(os.path.abspath(__file__))
 
 def listar_jornadas():
@@ -306,7 +303,7 @@ st.markdown(
 )
 
 # ── Preenche a faixa 1 (fallout por jornada + ações) ──────────────────────────
-_data_dir = _base_dir()   # local: pasta do app | Drive: pasta temporária
+_data_dir = _base_dir()
 
 
 def _tile_jornada(nome_jornada):
@@ -361,8 +358,8 @@ with faixa_topo:
             st.success("PowerPoint completo gerado — o download deve começar automaticamente.")
 
     st.caption("PowerPoint: 3 colunas + Top Ofensores + um slide por jornada. "
-               "Os dados são cacheados por até 30 min — use **Atualizar dados** "
-               "após alterar os arquivos no Drive.")
+               "Os dados são lidos da pasta `extracoes/` e ficam em cache — use "
+               "**Atualizar dados** depois de trocar os arquivos por lá.")
 
     st.markdown("<hr>", unsafe_allow_html=True)   # separa faixa 1 da faixa 2
 

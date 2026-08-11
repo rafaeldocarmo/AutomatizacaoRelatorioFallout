@@ -22,6 +22,11 @@ MESES_LABEL = {m: f"{abrev}-26" for abrev, m in ABREV_MES.items()}
 FASES_CORRIGIDO = {"Corrigido", "Fechado"}
 FASES_MOPS = {"Cancelado", "Rejeitado"}
 
+# Pasta local (dentro do projeto) com as jornadas e as planilhas do Octane.
+PASTA_DADOS = "extracoes"
+ARQ_DFT = "RelatorioDFTOctane.xlsx"
+ARQ_US = "RelatorioUSOctane.xlsx"
+
 COLUNAS_OCTANE_BASE = ["ID", "Name", "Phase", "Bugfix Milestone", "Team", "Type"]
 COL_US_MELHORIA = "US de Melhoria"
 
@@ -46,9 +51,37 @@ def mes_do_arquivo(path):
     return None
 
 
+def _subpastas(caminho):
+    if not os.path.isdir(caminho):
+        return []
+    return sorted(d for d in os.listdir(caminho) if os.path.isdir(os.path.join(caminho, d)))
+
+
+def _tem_jornadas(caminho):
+    """True se a pasta contém diretórios de jornada (com subpasta 'falhas')."""
+    return any(os.path.isdir(os.path.join(caminho, d, "falhas")) for d in _subpastas(caminho))
+
+
+def raiz_dados(base_dir):
+    """
+    Pasta que guarda as jornadas e as planilhas do Octane: `base_dir/extracoes`.
+
+    Se as jornadas não estiverem soltas ali dentro e sim agrupadas em um único
+    diretório (é o que acontece ao copiar a pasta exportada inteira, ex.:
+    extracoes/RelatoriosAutomatização/...), desce mais um nível automaticamente.
+    """
+    raiz = os.path.join(base_dir, PASTA_DADOS)
+    if _tem_jornadas(raiz):
+        return raiz
+    for d in _subpastas(raiz):
+        if _tem_jornadas(os.path.join(raiz, d)):
+            return os.path.join(raiz, d)
+    return raiz
+
+
 def jornadas_disponiveis(base_dir):
-    """Pastas de jornada existentes em `base_dir/extrações` (as que têm subpasta 'falhas')."""
-    raiz = os.path.join(base_dir, "extrações")
+    """Pastas de jornada disponíveis (as que têm subpasta 'falhas')."""
+    raiz = raiz_dados(base_dir)
     if not os.path.isdir(raiz):
         return []
     return sorted(
@@ -64,6 +97,21 @@ def resolver_jornadas(jornada, base_dir):
     if jornada == "Base + Cross Sell":
         return ["Base Móvel", "Cross Sell"]
     return [jornada]
+
+
+def _caminho_octane(raiz, base_dir, nome):
+    """
+    Localiza uma planilha do Octane: primeiro junto das jornadas (é onde a
+    exportação a coloca), com a raiz do projeto como alternativa.
+    """
+    for pasta in (raiz, base_dir):
+        caminho = os.path.join(pasta, nome)
+        if os.path.isfile(caminho):
+            return caminho
+    raise FileNotFoundError(
+        f"'{nome}' não encontrado. Coloque o arquivo em {raiz} (junto das "
+        f"pastas de jornada) ou em {base_dir}."
+    )
 
 
 def _norm_id(v):
@@ -82,16 +130,20 @@ def carregar_base(base_dir, jornada):
     `jornada` pode ser um nome de pasta única, "Base + Cross Sell" ou
     "Consolidado" — a resolução para as pastas reais é feita aqui.
     """
+    raiz = raiz_dados(base_dir)
     jornadas_combo = resolver_jornadas(jornada, base_dir)
     if not jornadas_combo:
-        raise FileNotFoundError("Nenhuma pasta de jornada encontrada em extrações/")
+        raise FileNotFoundError(
+            f"Nenhuma pasta de jornada encontrada em {raiz}. Cada jornada deve ser "
+            f"uma pasta com as subpastas 'falhas' e 'sucessos'."
+        )
 
     # ── Falhas ───────────────────────────────────────────────────────────
     arquivos_falhas = []
     for j in jornadas_combo:
-        arqs = sorted(glob.glob(os.path.join(base_dir, "extrações", j, "falhas", "*.csv")))
+        arqs = sorted(glob.glob(os.path.join(raiz, j, "falhas", "*.csv")))
         if not arqs:
-            raise FileNotFoundError(f"Nenhum arquivo encontrado em extrações/{j}/falhas/")
+            raise FileNotFoundError(f"Nenhum CSV encontrado em {os.path.join(raiz, j, 'falhas')}")
         arquivos_falhas += arqs
 
     df_falhas = pd.concat([pd.read_csv(f) for f in arquivos_falhas], ignore_index=True)
@@ -119,8 +171,8 @@ def carregar_base(base_dir, jornada):
     )
 
     # ── Octane: DFTs + US, com resolução de "US de Melhoria" ───────────────
-    df_dft = pd.read_excel(os.path.join(base_dir, "RelatorioDFTOctane.xlsx"))
-    df_us = pd.read_excel(os.path.join(base_dir, "RelatorioUSOctane.xlsx"))
+    df_dft = pd.read_excel(_caminho_octane(raiz, base_dir, ARQ_DFT))
+    df_us = pd.read_excel(_caminho_octane(raiz, base_dir, ARQ_US))
 
     df_dft_prep = df_dft[
         COLUNAS_OCTANE_BASE + ([COL_US_MELHORIA] if COL_US_MELHORIA in df_dft.columns else [])
@@ -180,9 +232,9 @@ def carregar_base(base_dir, jornada):
     # ── Sucessos por mês (mesmo denominador do fallout rate) ────────────
     arquivos_suc = []
     for j in jornadas_combo:
-        arqs_suc = sorted(glob.glob(os.path.join(base_dir, "extrações", j, "sucessos", "*.csv")))
+        arqs_suc = sorted(glob.glob(os.path.join(raiz, j, "sucessos", "*.csv")))
         if not arqs_suc:
-            raise FileNotFoundError(f"Nenhum arquivo encontrado em extrações/{j}/sucessos/")
+            raise FileNotFoundError(f"Nenhum CSV encontrado em {os.path.join(raiz, j, 'sucessos')}")
         arquivos_suc += arqs_suc
 
     partes_suc = []
