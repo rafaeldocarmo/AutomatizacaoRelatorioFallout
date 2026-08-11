@@ -220,22 +220,16 @@ with aba_consolidado:
                 file_name="slide_3colunas.pptx",
                 mime="application/vnd.openxmlformats-officedocument.presentationml.presentation")
 
-    # ── PowerPoint completo: 3 colunas + um slide por jornada (estilo print) ──
+    # ── PowerPoint completo: 3 colunas + Top Ofensores + um slide por jornada ──
     st.markdown("---")
-    st.markdown("**PowerPoint completo — 3 colunas + um slide por jornada**")
+    st.markdown("**PowerPoint completo — 3 colunas + Top Ofensores + um slide por jornada**")
     if st.button("📑 Gerar PowerPoint completo"):
         from gerar_slide3col import gerar_pptx_completo
         with st.spinner("Gerando PowerPoint completo (isso lê todos os dados de novo, pode levar um tempo)..."):
-            st.session_state["pptx_completo_bytes"] = gerar_pptx_completo(_data_dir).getvalue()
-        st.session_state["pptx_completo_baixar_agora"] = True
-
-    if st.session_state.get("pptx_completo_bytes"):
+            pptx_bytes = gerar_pptx_completo(_data_dir).getvalue()
         _PPTX_MIME = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-        if st.session_state.pop("pptx_completo_baixar_agora", False):
-            disparar_download(st.session_state["pptx_completo_bytes"], "relatorio_completo.pptx", _PPTX_MIME)
-        st.download_button(
-            "⬇ Baixar PowerPoint completo", data=st.session_state["pptx_completo_bytes"],
-            file_name="relatorio_completo.pptx", mime=_PPTX_MIME)
+        disparar_download(pptx_bytes, "relatorio_completo.pptx", _PPTX_MIME)
+        st.success("PowerPoint completo gerado — o download deve começar automaticamente.")
 
 with aba_distribuicao:
     st.subheader(f"Distribuição Fallout — {mes_labels[mes_escolhido]}")
