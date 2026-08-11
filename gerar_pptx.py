@@ -5,7 +5,7 @@ para uma jornada, reaproveitando a lógica do pipeline.py.
 Uso como módulo:  from gerar_pptx import gerar_pptx; buf = gerar_pptx("Base Móvel", base_dir)
 Uso via CLI:      python gerar_pptx.py "Base Móvel"
 """
-import os, re, sys, io, tempfile, contextlib
+import os, sys, io, tempfile, contextlib
 import matplotlib
 matplotlib.use("Agg")
 from pptx import Presentation
@@ -15,6 +15,8 @@ from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
 from pptx.oxml.ns import qn, nsdecls
 from pptx.oxml import parse_xml
 
+import pipeline
+
 RED = RGBColor(0xC0, 0x39, 0x2B); WHITE = RGBColor(0xFF, 0xFF, 0xFF)
 GRAY = RGBColor(0xF2, 0xF2, 0xF2); GRAY2 = RGBColor(0xF5, 0xF5, 0xF5)
 FG = RGBColor(0x22, 0x22, 0x22)
@@ -22,22 +24,17 @@ FG = RGBColor(0x22, 0x22, 0x22)
 
 # ── Extração dos dados via pipeline ──────────────────────────────────────────
 def _extrair(jornada, base_dir):
-    """Executa o pipeline na pasta base_dir e devolve (data, caminho_chart_png)."""
-    pipeline_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pipeline.py")
-    with open(pipeline_path, encoding="utf-8") as f:
-        src = f.read()
-    src = re.sub(r"plt\.close\([^)]*\)", "pass", src)   # mantém figuras vivas p/ recortar
+    """Roda pipeline.gerar_relatorio() e devolve (data, caminho_chart_png)."""
+    # redireciona stdout p/ buffer unicode (evita crash de cp1252 com os prints ✓/→)
+    with contextlib.redirect_stdout(io.StringIO()):
+        ns = pipeline.gerar_relatorio(base_dir, jornada)
+    return _montar_dados(jornada, ns)
 
-    old_cwd = os.getcwd(); old_argv = sys.argv
-    os.chdir(base_dir); sys.argv = ["pipeline.py", jornada]
-    try:
-        ns = {"__name__": "__pipeline__"}
-        # redireciona stdout p/ buffer unicode (evita crash de cp1252 com os prints ✓/→)
-        with contextlib.redirect_stdout(io.StringIO()):
-            exec(compile(src, "pipeline.py", "exec"), ns)
-    finally:
-        os.chdir(old_cwd); sys.argv = old_argv
 
+def _montar_dados(jornada, ns):
+    """Monta (data, caminho_chart_png) a partir de um resultado já calculado
+    por pipeline.gerar_relatorio() — evita recalcular a mesma jornada duas vezes
+    quando ela já foi usada em outro slide (ex.: Top Ofensores)."""
     import pandas as pd
     resumo = ns["resumo"]; ML = ns["MESES_LABEL"]; reducao = ns["reducao"]
     meses_vol = ns["meses_vol"]
@@ -245,6 +242,95 @@ def _montar_slide(prs, d, chart_png):
             bold = (ci == 0 and (row["kind"] == "sucesso" or val == "Falha"))
             _cell(dt2.cell(ri + 1, ci), val, fs, bold=bold, bg=bg, align=al)
     _borda_clara(dt2)   # bordas finas em cinza claro (igual ao PNG)
+
+
+# ── Slide "Top Ofensores": Top N defeitos/US de todas as jornadas juntas ────
+JORNADA_LABEL_CURTO = {"Base Móvel": "Base"}
+
+
+def _montar_slide_top_ofensores(prs, ns_consolidado, ns_por_jornada, top_n=15):
+    """
+    Adiciona um slide com uma única tabela "Top Ofensores": os `top_n` defeitos/US
+    com maior % no mês mais recente, juntando todas as jornadas brutas em
+    `ns_por_jornada` (cada uma vira uma linha "Jornada"), ordenados decrescente.
+    Reaproveita o mesmo layout/estilo da tabela detalhada de `_montar_slide`.
+    """
+    import pandas as pd
+
+    meses_tab = ns_consolidado["meses_tab"]
+    MESES_LABEL = ns_consolidado["MESES_LABEL"]
+    labels_tab = [MESES_LABEL[m][:3].capitalize() for m in meses_tab]
+    resumo = ns_consolidado["resumo"]; pct_m_consolidado = ns_consolidado["pct_m"]
+
+    candidatos = []
+    for jornada, ns in ns_por_jornada.items():
+        pivot2 = ns["pivot2"]; pct_m = ns["pct_m"]
+        fmt_id = ns["fmt_id"]; fmt_ms = ns["fmt_milestone"]
+        label_jornada = JORNADA_LABEL_CURTO.get(jornada, jornada)
+        for _, row in pivot2.iterrows():
+            tipo = str(row["DFT_Type"]).strip() if pd.notna(row["DFT_Type"]) else ""
+            tipo_fmt = "US" if tipo == "User Story" else "Defeito"
+            id_str = fmt_id({"DefectNumber__c": row["DefectNumber__c"],
+                              "DFT_BugfixMilestone": row["DFT_BugfixMilestone"]})
+            ms_fmt = fmt_ms(row["DFT_BugfixMilestone"])
+            nome = str(row["DFT_Name"])[:80] if pd.notna(row["DFT_Name"]) else ""
+            team = str(row["DFT_Team"])[:35] if pd.notna(row["DFT_Team"]) else ""
+            phase = str(row["DFT_Phase"])[:25] if pd.notna(row["DFT_Phase"]) else ""
+            valores = [pct_m(int(row.loc[m]) if m in row.index else 0, m) for m in meses_tab]
+            cells = [label_jornada, tipo_fmt, id_str, ms_fmt, nome, team, phase] + \
+                    [f"{v:.2f}%".replace(".", ",") for v in valores]
+            candidatos.append((valores[-1], cells))   # ordena pelo mês mais recente
+
+    candidatos.sort(key=lambda c: c[0], reverse=True)
+    top_linhas = [cells for _, cells in candidatos[:top_n]]
+
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    tb = slide.shapes.add_shape(1, Inches(0), Inches(0.05), Inches(13.333), Inches(0.5))
+    tb.fill.solid(); tb.fill.fore_color.rgb = RED; tb.line.fill.background()
+    p = tb.text_frame.paragraphs[0]; p.alignment = PP_ALIGN.CENTER
+    r = p.add_run(); r.text = "Consolidado - Top Ofensores - Defeitos com Squad"
+    r.font.size = Pt(20); r.font.bold = True; r.font.color.rgb = WHITE; r.font.name = "Calibri"
+
+    def add_tbl(nr, nc, x, y, w, h):
+        gf = slide.shapes.add_table(nr, nc, Inches(x), Inches(y), Inches(w), Inches(h))
+        _no_style(gf.table); return gf.table
+
+    COLS = ["Classificação", "Agrupamento", "Jornada", "Tipo", "Defeito/US",
+            "Data Prod\nnão resolvidos", "Nome Defeito", "Time", "Status\nDefeito/US"] + labels_tab
+    ws = [0.7, 1.65, 0.8, 0.65, 0.85, 1.05, 3.1, 1.45, 1.3]
+    ws += [(13.0 - sum(ws)) / len(labels_tab)] * len(labels_tab)
+
+    n_data = 1 + len(top_linhas)          # linha Sucesso + top N linhas de falha
+    n_total = 1 + n_data                  # + cabeçalho
+    rh = max(0.24, min(0.42, 6.4 / max(n_data, 1)))
+    y = 0.68
+
+    tbl = add_tbl(n_total, len(COLS), 0.18, y, 13.0, rh * n_total)
+    _widths(tbl, ws); _rowh(tbl, rh)
+
+    for ci, col in enumerate(COLS):
+        _cell(tbl.cell(0, ci), col, 7.0, bold=True, fg=WHITE, bg=RED)
+
+    # ── Linha Sucesso (taxa consolidada, todas as jornadas somadas) ────────
+    _cell(tbl.cell(1, 0), "Sucesso", 7.0, bg=WHITE)
+    for ci in range(1, len(COLS) - len(labels_tab)):
+        _cell(tbl.cell(1, ci), "", 7.0, bg=WHITE)
+    for li, m in enumerate(meses_tab):
+        suc_pct = pct_m_consolidado(resumo.loc[m, "Sucessos"] if m in resumo.index else 0, m)
+        _cell(tbl.cell(1, len(COLS) - len(labels_tab) + li), f"{suc_pct:.2f}%".replace(".", ","), 7.0, bg=WHITE)
+
+    # ── Linhas do Top N ──────────────────────────────────────────────────
+    for ri, cells in enumerate(top_linhas):
+        row_idx = 2 + ri
+        bg = WHITE if ri % 2 == 0 else GRAY2
+        _cell(tbl.cell(row_idx, 0), "Falha" if ri == 0 else "", 7.0, bg=bg, bold=(ri == 0))
+        _cell(tbl.cell(row_idx, 1), "Em Tratamento/Avaliação\npela Squad" if ri == 0 else "", 6.2, bg=bg)
+        for ci, val in enumerate(cells):
+            al = "left" if ci == 4 else "center"       # 4 = Nome Defeito
+            fs = 5.5 if ci == 4 else (6.2 if ci in (0, 5, 6) else 7.0)
+            _cell(tbl.cell(row_idx, 2 + ci), val, fs, bg=bg, align=al)
+
+    _borda_clara(tbl)
 
 
 def gerar_pptx(jornada, base_dir="."):

@@ -6,11 +6,13 @@ Uso como módulo:  from gerar_slide3col import gerar_slide3col
                   buf = gerar_slide3col(base_dir)
 Uso via CLI:      python gerar_slide3col.py
 """
-import os, re, sys, io, contextlib, tempfile
+import os, sys, io, tempfile, contextlib
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
+from matplotlib.backends.backend_agg import FigureCanvasAgg
+from matplotlib.figure import Figure
 from pptx import Presentation
 from pptx.util import Inches, Pt
 from pptx.enum.text import PP_ALIGN
@@ -18,6 +20,9 @@ from pptx.enum.shapes import MSO_CONNECTOR
 from pptx.enum.dml import MSO_LINE_DASH_STYLE
 from pptx.dml.color import RGBColor
 
+import fallout_core
+import pipeline
+import gerar_pptx
 from gerar_pptx import (RED, WHITE, GRAY, GRAY2, FG,
                         _cell, _widths, _rowh, _no_style, _sem_bordas, _borda_clara)
 
@@ -35,20 +40,9 @@ RGB_SEP   = RGBColor(0xDC, 0xDC, 0xDC)
 
 # ── Extração ────────────────────────────────────────────────────────────────
 def _extrair_col(jornada, base_dir):
-    """Roda o pipeline para a jornada e devolve os blocos da coluna."""
-    pipeline_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pipeline.py")
-    with open(pipeline_path, encoding="utf-8") as f:
-        src = re.sub(r"plt\.close\([^)]*\)", "pass", f.read())
-
-    old_cwd, old_argv = os.getcwd(), sys.argv
-    os.chdir(base_dir); sys.argv = ["pipeline.py", jornada]
-    try:
-        ns = {"__name__": "__pipeline__"}
-        with contextlib.redirect_stdout(io.StringIO()):
-            exec(compile(src, "pipeline.py", "exec"), ns)
-    finally:
-        os.chdir(old_cwd); sys.argv = old_argv
-    plt.close("all")
+    """Roda pipeline.gerar_relatorio() para a jornada e devolve os blocos da coluna."""
+    with contextlib.redirect_stdout(io.StringIO()):
+        ns = pipeline.gerar_relatorio(base_dir, jornada)
 
     resumo = ns["resumo"]; ML = ns["MESES_LABEL"]
     todos  = sorted(resumo.index.tolist())
@@ -82,12 +76,14 @@ def _extrair_col(jornada, base_dir):
              "plabels": ns["proj_labels"], "pvals": list(ns["proj_vals"])}
 
     return {"volume": volume, "dist": dist, "plan": plan, "chart": chart,
-            "corte": ns["hoje"].tz_convert("America/Sao_Paulo")}
+            "corte": ns["hoje"].tz_convert("America/Sao_Paulo"), "ns": ns}
 
 
 def _chart_png(c, destino, larg_in, alt_in):
     """Gráfico compacto da coluna (real + projeção + meta)."""
-    fig = plt.figure(figsize=(larg_in, alt_in)); fig.patch.set_facecolor(COR_BRANCO)
+    fig = Figure(figsize=(larg_in, alt_in))
+    FigureCanvasAgg(fig)
+    fig.patch.set_facecolor(COR_BRANCO)
     ax = fig.add_axes([0.13, 0.26, 0.84, 0.66])
     labs = c["labels"] + c["plabels"][1:]
 
@@ -118,7 +114,6 @@ def _chart_png(c, destino, larg_in, alt_in):
         ax.spines[s].set_visible(False)
 
     fig.savefig(destino, dpi=200, facecolor=COR_BRANCO)
-    plt.close(fig)
 
 
 def extrair_todas(base_dir="."):
@@ -127,11 +122,8 @@ def extrair_todas(base_dir="."):
 
 
 # ── Montagem: PowerPoint ────────────────────────────────────────────────────
-def gerar_slide3col(base_dir=".", dados=None):
-    dados = dados or extrair_todas(base_dir)
-
-    prs = Presentation()
-    prs.slide_width, prs.slide_height = Inches(13.333), Inches(7.5)
+def _montar_slide3col(prs, dados):
+    """Adiciona o slide de 3 colunas à apresentação `prs` já existente."""
     slide = prs.slides.add_slide(prs.slide_layouts[6])
 
     # Faixa de título
@@ -256,6 +248,45 @@ def gerar_slide3col(base_dir=".", dados=None):
             _cell(t.cell(1 + ri, 2), r["pct"], FD, bold=True, bg=bg, align="right")
         _sem_bordas(t)
 
+
+def gerar_slide3col(base_dir=".", dados=None):
+    """Gera um PPTX contendo só o slide de 3 colunas. Devolve os bytes (BytesIO)."""
+    dados = dados or extrair_todas(base_dir)
+    prs = Presentation()
+    prs.slide_width, prs.slide_height = Inches(13.333), Inches(7.5)
+    _montar_slide3col(prs, dados)
+    buf = io.BytesIO(); prs.save(buf); buf.seek(0)
+    return buf
+
+
+def gerar_pptx_completo(base_dir=".", dados_3col=None):
+    """
+    PPTX único:
+      1. Slide de 3 colunas (Consolidado | Prospect | Base + Cross Sell)
+      2. Slide "Top Ofensores" — Top 15 defeitos/US de todas as jornadas juntas
+      3. Um slide no estilo do "print" para cada jornada bruta encontrada em
+         extrações/ (ex.: Base Móvel, Cross Sell, Prospect — sem os combinados)
+    Devolve os bytes (BytesIO).
+    """
+    dados_3col = dados_3col or extrair_todas(base_dir)
+
+    prs = Presentation()
+    prs.slide_width, prs.slide_height = Inches(13.333), Inches(7.5)
+
+    _montar_slide3col(prs, dados_3col)
+
+    jornadas_brutas = fallout_core.jornadas_disponiveis(base_dir)
+    ns_por_jornada = {j: pipeline.gerar_relatorio(base_dir, j) for j in jornadas_brutas}
+
+    ns_consolidado = (dados_3col.get("Consolidado") or {}).get("ns")
+    if ns_consolidado is None:
+        ns_consolidado = pipeline.gerar_relatorio(base_dir, "Consolidado")
+    gerar_pptx._montar_slide_top_ofensores(prs, ns_consolidado, ns_por_jornada)
+
+    for jornada, ns in ns_por_jornada.items():
+        data, chart_png = gerar_pptx._montar_dados(jornada, ns)
+        gerar_pptx._montar_slide(prs, data, chart_png)
+
     buf = io.BytesIO(); prs.save(buf); buf.seek(0)
     return buf
 
@@ -268,7 +299,9 @@ def gerar_slide3col_png(base_dir=".", dados=None):
     """Mesmo slide em PNG (16x9). Devolve BytesIO."""
     dados = dados or extrair_todas(base_dir)
 
-    fig = plt.figure(figsize=(16, 9)); fig.patch.set_facecolor(COR_BRANCO)
+    fig = Figure(figsize=(16, 9))
+    FigureCanvasAgg(fig)
+    fig.patch.set_facecolor(COR_BRANCO)
     ax = fig.add_axes([0, 0, 1, 1]); ax.set_xlim(0, 16); ax.set_ylim(0, 9); ax.axis("off")
 
     ax.add_patch(plt.Rectangle((0, 8.42), 16, 0.58, facecolor=COR_RED))
@@ -369,7 +402,7 @@ def gerar_slide3col_png(base_dir=".", dados=None):
 
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=150, facecolor=COR_BRANCO)
-    plt.close(fig); buf.seek(0)
+    buf.seek(0)
     return buf
 
 

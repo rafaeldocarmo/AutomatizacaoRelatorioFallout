@@ -1,24 +1,11 @@
 import streamlit as st
 import pandas as pd
-import glob, os
-from datetime import timezone, timedelta
+import os
 from drive_utils import drive_configurado, baixar_arquivos_drive
+import fallout_core
+from fallout_core import MESES_PT
 
 st.set_page_config(page_title="Fallout Explorer", layout="wide")
-
-# ── Constantes ────────────────────────────────────────────────────────────────
-ABREV_MES = {"jan":1,"fev":2,"mar":3,"abr":4,"mai":5,"jun":6,
-             "jul":7,"ago":8,"set":9,"out":10,"nov":11,"dez":12}
-MESES_PT  = {1:"Jan",2:"Fev",3:"Mar",4:"Abr",5:"Mai",6:"Jun",
-             7:"Jul",8:"Ago",9:"Set",10:"Out",11:"Nov",12:"Dez"}
-FASES_CORRIGIDO = {"Corrigido", "Fechado"}
-
-def mes_do_arquivo(path):
-    nome = os.path.splitext(os.path.basename(path))[0].lower()
-    for abrev, num in ABREV_MES.items():
-        if abrev in nome:
-            return num
-    return None
 
 # ── Leitura de dados (cache) ──────────────────────────────────────────────────
 def _base_dir():
@@ -27,24 +14,8 @@ def _base_dir():
         return baixar_arquivos_drive()
     return os.path.dirname(os.path.abspath(__file__))
 
-def _jornadas_em(base):
-    """Pastas de jornada existentes (as que têm subpasta 'falhas')."""
-    pasta_extracoes = os.path.join(base, "extrações")
-    return sorted(
-        d for d in os.listdir(pasta_extracoes)
-        if os.path.isdir(os.path.join(pasta_extracoes, d, "falhas"))
-    )
-
-def _resolver_jornadas(jornada, base):
-    """Traduz o nome escolhido nas pastas que devem ser lidas."""
-    if jornada == "Consolidado":
-        return _jornadas_em(base)
-    if jornada == "Base + Cross Sell":
-        return ["Base Móvel", "Cross Sell"]
-    return [jornada]
-
 def listar_jornadas():
-    jornadas = _jornadas_em(_base_dir())
+    jornadas = fallout_core.jornadas_disponiveis(_base_dir())
     opcoes = list(jornadas)
     if "Base Móvel" in jornadas and "Cross Sell" in jornadas:
         opcoes.append("Base + Cross Sell")
@@ -55,141 +26,8 @@ def listar_jornadas():
 @st.cache_data(show_spinner="Carregando dados...")
 def carregar_dados(jornada: str):
     base = _base_dir()
-    jornadas_combo = _resolver_jornadas(jornada, base)
-
-    arquivos_falhas = []
-    for _j in jornadas_combo:
-        arquivos_falhas += sorted(glob.glob(os.path.join(base, "extrações", _j, "falhas/*.csv")))
-    df_falhas = pd.concat(
-        [pd.read_csv(f) for f in arquivos_falhas],
-        ignore_index=True
-    )
-    df_falhas["CreatedDate"] = pd.to_datetime(df_falhas["CreatedDate"], utc=True, errors="coerce")
-    df_falhas = df_falhas.rename(columns={
-        "vlocity_cmt__OrchestrationPlanId__r.vlocity_cmt__OrderId__r.OrderNumber": "OrderNumber",
-        "vlocity_cmt__OrchestrationPlanId__r.vlocity_cmt__OrderId__r.Channel__c":  "Channel",
-        "vlocity_cmt__OrchestrationPlanId__r.vlocity_cmt__OrderId__r.Segment__c":  "Segment",
-        "vlocity_cmt__OrchestrationPlanId__r.vlocity_cmt__OrderId__r.Status":      "OrderStatus",
-        "vlocity_cmt__OrchestrationPlanId__r.vlocity_cmt__OrderId__r.SubStatus__c": "SubStatus",
-        "vlocity_cmt__OrchestrationPlanId__r.vlocity_cmt__OrderId__r.BiometryStatus__c": "BiometryStatus",
-        "vlocity_cmt__State__c": "State",
-        "vlocity_cmt__OrchestrationPlanId__r.vlocity_cmt__OrderId__r.vlocity_cmt__Reason__c": "Reason",
-    })
-    df_falhas["DefectNumber_orig"] = df_falhas["DefectNumber__c"].astype(str).str.strip()
-    df_falhas["DefectNumber__c"] = (
-        pd.to_numeric(df_falhas["DefectNumber__c"], errors="coerce")
-        .fillna(-1).astype(int)
-    )
-    df_falhas["Mes"] = df_falhas["CreatedDate"].dt.tz_convert("America/Sao_Paulo").dt.month
-
-    df_dft = pd.read_excel(os.path.join(base, "RelatorioDFTOctane.xlsx"))
-    df_us  = pd.read_excel(os.path.join(base, "RelatorioUSOctane.xlsx"))
-    colunas_base    = ["ID", "Name", "Phase", "Bugfix Milestone", "Team", "Type"]
-    COL_US_MELHORIA = "US de Melhoria"
-
-    df_dft_prep = df_dft[colunas_base + ([COL_US_MELHORIA] if COL_US_MELHORIA in df_dft.columns else [])].copy()
-
-    if COL_US_MELHORIA in df_dft_prep.columns:
-        def _norm_id(v):
-            try:    return str(int(float(str(v).strip())))
-            except: return str(v).strip()
-
-        df_us_idx = df_us.set_index("ID")[["Name", "Phase", "Bugfix Milestone", "Team", "Type"]].copy()
-        df_us_idx.index = [_norm_id(v) for v in df_us_idx.index]
-
-        df_dft_prep[COL_US_MELHORIA] = df_dft_prep[COL_US_MELHORIA].apply(_norm_id)
-        _has_us = df_dft_prep[COL_US_MELHORIA].notna() & ~df_dft_prep[COL_US_MELHORIA].isin(["", "nan", "None"])
-        for i, row in df_dft_prep[_has_us].iterrows():
-            us_id = row[COL_US_MELHORIA]
-            if us_id in df_us_idx.index:
-                us = df_us_idx.loc[us_id]
-                for col in ["Name", "Phase", "Bugfix Milestone", "Team"]:
-                    if pd.notna(us[col]):
-                        df_dft_prep.at[i, col] = us[col]
-                df_dft_prep.at[i, "Type"] = "User Story"
-
-    df_octane = (
-        pd.concat([df_dft_prep[colunas_base], df_us[colunas_base]], ignore_index=True)
-        .drop_duplicates(subset="ID")
-        .rename(columns={"ID":"DefectNumber__c","Name":"DFT_Name","Phase":"DFT_Phase",
-                         "Bugfix Milestone":"DFT_BugfixMilestone","Team":"DFT_Team","Type":"DFT_Type"})
-    )
-    df_octane["DefectNumber__c"] = (
-        pd.to_numeric(df_octane["DefectNumber__c"], errors="coerce")
-        .fillna(-1).astype(int)
-    )
-
-    df = df_falhas.merge(df_octane, on="DefectNumber__c", how="left")
-
-    # Desduplicar por OrderNumber: mantém a linha com DFT real (> 0) se existir
-    df = (
-        df.sort_values("DefectNumber__c", ascending=False)
-          .drop_duplicates(subset=["OrderNumber"])
-          .reset_index(drop=True)
-    )
-
-    # Sucessos por mês (mesmo denominador do pipeline)
-    arquivos_suc = []
-    for _j in jornadas_combo:
-        arquivos_suc += sorted(glob.glob(os.path.join(base, "extrações", _j, "sucessos/*.csv")))
-    partes_suc = []
-    for f in arquivos_suc:
-        mes = mes_do_arquivo(f)
-        if mes is None:
-            continue
-        df_tmp = pd.read_csv(f).rename(columns={"expr0": "Sucessos"})
-        df_tmp["Mes"] = mes
-        partes_suc.append(df_tmp[["Mes", "Sucessos"]])
-    sucessos_mes = pd.concat(partes_suc, ignore_index=True).groupby("Mes")["Sucessos"].sum()
-
-    falhas_mes = df.groupby("Mes").size().rename("Falhas")
-    resumo = pd.DataFrame({"Falhas": falhas_mes, "Sucessos": sucessos_mes}).fillna(0)
-    resumo["Total"] = resumo["Falhas"] + resumo["Sucessos"]
-
+    df, _df_octane, resumo, _jornadas_combo = fallout_core.carregar_base(base, jornada)
     return df, resumo
-
-# ── Categorização para um mês ─────────────────────────────────────────────────
-FASES_MOPS = {"Cancelado", "Rejeitado"}
-
-def categorizar(df, mes):
-    hoje        = pd.Timestamp.now(tz="UTC")
-    quinze_dias = hoje - pd.Timedelta(days=15)
-    df_mes      = df[df["Mes"] == mes].copy()
-
-    milestone_dt  = pd.to_datetime(df_mes["DFT_BugfixMilestone"], utc=True, errors="coerce")
-    _corrigido    = df_mes["DFT_Phase"].fillna("").str.strip().isin(FASES_CORRIGIDO)
-    _tem_ms       = df_mes["DFT_BugfixMilestone"].notna()
-    _encerrado    = _corrigido & _tem_ms & (milestone_dt <= hoje)
-    _outros_mask  = df_mes["DefectNumber_orig"].str.strip().str.lower() == "enviado e-mail - outros times"
-    _erro_proc_mask = df_mes["DefectNumber_orig"].str.strip().str.lower() == "erro de processo"
-
-    cats = {
-        "Em Tratamento/Avaliação pela Squad": df_mes[
-            df_mes["DefectNumber__c"].notna() &
-            (df_mes["DefectNumber__c"] != 999999) &
-            (df_mes["DefectNumber__c"] != -1) &
-            ~df_mes["DFT_Phase"].fillna("").str.strip().isin(FASES_MOPS) &
-            ~_encerrado
-        ],
-        "Resolvido": df_mes[_corrigido & _tem_ms & (milestone_dt < quinze_dias)],
-        "Falha Pontual": df_mes[df_mes["DefectNumber__c"] == 999999],
-        "Falta Associar ao Defeito/US": df_mes[
-            (df_mes["DefectNumber__c"].isna() | (df_mes["DefectNumber__c"] == -1)) &
-            ~_outros_mask & ~_erro_proc_mask
-        ],
-        "Tratado - Em avaliação de eficácia": df_mes[
-            _corrigido & _tem_ms & (milestone_dt >= quinze_dias) & (milestone_dt <= hoje)
-        ],
-        "Em Avaliação por MOPs": df_mes[
-            (df_mes["DefectNumber__c"] > 0) &
-            (df_mes["DefectNumber__c"] != 999999) &
-            df_mes["DFT_Phase"].fillna("").str.strip().isin(FASES_MOPS)
-        ],
-        "Em avaliação - Outros times": df_mes[_outros_mask],
-        "Falha no Processo Usuário": df_mes[_erro_proc_mask],
-    }
-    total = len(df_mes)
-    return df_mes, cats, total
 
 # ── Colunas a exibir na tabela de pedidos ─────────────────────────────────────
 COLS_EXIBIR = [
@@ -207,6 +45,15 @@ def to_excel_bytes(df_export: pd.DataFrame) -> bytes:
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
         df_exp.to_excel(writer, index=False)
     return buf.getvalue()
+
+def disparar_download(data: bytes, file_name: str, mime: str):
+    """Dispara o download do navegador automaticamente (sem precisar de um 2º clique)."""
+    import base64
+    b64 = base64.b64encode(data).decode()
+    st.components.v1.html(f"""
+        <a id="auto-dl" href="data:{mime};base64,{b64}" download="{file_name}"></a>
+        <script>document.getElementById('auto-dl').click();</script>
+    """, height=0)
 
 # ── Interface ──────────────────────────────────────────────────────────────────
 st.markdown("""
@@ -246,7 +93,7 @@ with col_sel:
 total_mes = int(resumo.loc[mes_escolhido, "Total"]) if mes_escolhido in resumo.index else 1
 fallout_pct = resumo.loc[mes_escolhido, "Falhas"] / total_mes * 100 if mes_escolhido in resumo.index else 0
 
-df_mes, cats, _ = categorizar(df, mes_escolhido)
+df_mes, cats, _ = fallout_core.categorizar(df, mes_escolhido)
 
 with col_info:
     st.metric("Total de pedidos no mês", f"{total_mes:,}")
@@ -372,6 +219,23 @@ with aba_consolidado:
                 "⬇ Baixar slide (PowerPoint)", data=st.session_state["s3col_bytes"],
                 file_name="slide_3colunas.pptx",
                 mime="application/vnd.openxmlformats-officedocument.presentationml.presentation")
+
+    # ── PowerPoint completo: 3 colunas + um slide por jornada (estilo print) ──
+    st.markdown("---")
+    st.markdown("**PowerPoint completo — 3 colunas + um slide por jornada**")
+    if st.button("📑 Gerar PowerPoint completo"):
+        from gerar_slide3col import gerar_pptx_completo
+        with st.spinner("Gerando PowerPoint completo (isso lê todos os dados de novo, pode levar um tempo)..."):
+            st.session_state["pptx_completo_bytes"] = gerar_pptx_completo(_data_dir).getvalue()
+        st.session_state["pptx_completo_baixar_agora"] = True
+
+    if st.session_state.get("pptx_completo_bytes"):
+        _PPTX_MIME = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        if st.session_state.pop("pptx_completo_baixar_agora", False):
+            disparar_download(st.session_state["pptx_completo_bytes"], "relatorio_completo.pptx", _PPTX_MIME)
+        st.download_button(
+            "⬇ Baixar PowerPoint completo", data=st.session_state["pptx_completo_bytes"],
+            file_name="relatorio_completo.pptx", mime=_PPTX_MIME)
 
 with aba_distribuicao:
     st.subheader(f"Distribuição Fallout — {mes_labels[mes_escolhido]}")
