@@ -12,21 +12,15 @@ import os
 import socket
 import subprocess
 import sys
-import threading
 import time
 import urllib.error
 import urllib.request
-
-import webview
+import webbrowser
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 APP = os.path.join(APP_DIR, "app.py")
 TITULO = "Explorador de Fallout"
 LOG = os.path.join(APP_DIR, "launcher.log")
-
-# Sem isso o WebView2 engole os downloads e os botões de PowerPoint/Excel
-# não fazem nada.
-webview.settings["ALLOW_DOWNLOADS"] = True
 
 
 def _log(msg):
@@ -77,50 +71,67 @@ def _esperar(porta, proc, timeout=120):
     raise TimeoutError(f"servidor não respondeu em {timeout}s")
 
 
+def _encerrar_servidor(proc):
+    if proc and proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+
+def _abrir_em_janela(url, proc):
+    """
+    Janela nativa via WebView2. Levanta exceção se o pywebview/pythonnet não
+    conseguir carregar o .NET — nesse caso quem chama cai para o navegador.
+    """
+    import webview
+
+    # Sem isso o WebView2 cancela os downloads e os botões de PowerPoint/Excel
+    # não fazem nada.
+    webview.settings["ALLOW_DOWNLOADS"] = True
+
+    janela = webview.create_window(
+        TITULO, url, width=1500, height=950, min_size=(1100, 700),
+    )
+    janela.events.closed += lambda: (_log("janela fechada"), _encerrar_servidor(proc))
+    webview.start()
+
+
+def _abrir_no_navegador(url, proc):
+    """
+    Plano B: abre no navegador padrão e segura o servidor de pé.
+
+    Usado quando a janela nativa não sobe — o caso conhecido é o .NET recusar
+    as DLLs do pythonnet quando a pasta foi copiada de outra máquina e o
+    Windows marcou os arquivos como bloqueados (Mark of the Web).
+    """
+    _log(f"abrindo no navegador: {url}")
+    webbrowser.open(url)
+    proc.wait()   # segura até o servidor cair
+    _log("servidor encerrado")
+
+
 def main():
     proc = None
     try:
         porta = _porta_livre()
         proc = _subir_streamlit(porta)
         _esperar(porta, proc)
-        _log(f"servidor pronto em 127.0.0.1:{porta}")
+        url = f"http://127.0.0.1:{porta}"
+        _log(f"servidor pronto em {url}")
 
-        janela = webview.create_window(
-            TITULO, f"http://127.0.0.1:{porta}",
-            width=1500, height=950, min_size=(1100, 700),
-        )
-
-        def _encerrar():
-            _log("janela fechada, encerrando o servidor")
-            if proc and proc.poll() is None:
-                proc.terminate()
-                try:
-                    proc.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-
-        janela.events.closed += _encerrar
-        webview.start()
-    except Exception as e:                      # noqa: BLE001 - vai para o log
-        _log(f"ERRO: {type(e).__name__}: {e}")
-        if proc and proc.poll() is None:
-            proc.kill()
-        # Sem console (pythonw), a janela é a única forma de avisar.
         try:
-            webview.create_window(
-                f"{TITULO} — erro",
-                html=f"<body style='font-family:sans-serif;padding:24px'>"
-                     f"<h2>Não foi possível iniciar</h2><p>{e}</p>"
-                     f"<p style='color:#666'>Detalhes em launcher.log</p></body>",
-                width=640, height=320,
-            )
-            webview.start()
-        except Exception:
-            pass
+            _abrir_em_janela(url, proc)
+        except Exception as e:              # noqa: BLE001 - queda controlada
+            _log(f"janela nativa indisponível ({type(e).__name__}: {e})")
+            _log("caindo para o navegador padrão")
+            _abrir_no_navegador(url, proc)
+    except Exception as e:                  # noqa: BLE001 - vai para o log
+        _log(f"ERRO: {type(e).__name__}: {e}")
         return 1
     finally:
-        if proc and proc.poll() is None:
-            proc.kill()
+        _encerrar_servidor(proc)
     return 0
 
 

@@ -47,6 +47,26 @@ rem Abre o Explorador de Fallout em janela propria, sem console.
 start "" "%~dp0python\pythonw.exe" "%~dp0launcher.py"
 """
 
+# Windows marca arquivos vindos de outra maquina (Mark of the Web) e o .NET
+# recusa DLLs nesse estado — e ai a janela nativa nao sobe. Unblock-File
+# resolve e nao precisa de admin.
+DESBLOQUEAR = r"""@echo off
+echo Liberando os arquivos copiados de outra maquina...
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "Get-ChildItem -LiteralPath '%~dp0.' -Recurse -File | Unblock-File"
+echo.
+echo Pronto. Abra o "Explorador de Fallout".
+pause
+"""
+
+# Plano B sem pywebview: Streamlit no navegador, com console visivel para
+# poder encerrar fechando a janela preta.
+NAVEGADOR = r"""@echo off
+title Explorador de Fallout (navegador) - feche esta janela para encerrar
+"%~dp0python\python.exe" -m streamlit run "%~dp0app.py" --server.address=127.0.0.1 --browser.gatherUsageStats=false
+pause
+"""
+
 LEIAME = """Explorador de Fallout — versão portátil
 =======================================
 
@@ -76,7 +96,17 @@ subpastas "falhas" e "sucessos" — o app descobre sozinho.
 
 Se não abrir
 ------------
-Veja o arquivo "launcher.log", criado ao lado do atalho.
+1. Rode "Desbloquear arquivos.bat" e tente de novo.
+
+   O Windows marca como bloqueado tudo que vem de outra máquina (zip, rede,
+   download) e o .NET recusa carregar as bibliotecas nesse estado — é a causa
+   mais comum da janela não abrir. Não precisa de administrador.
+
+2. Se ainda assim não abrir, use "Abrir no navegador.bat". O app é o mesmo;
+   só roda em aba do navegador em vez de janela própria. Para encerrar,
+   feche a janela preta do console.
+
+3. O arquivo "launcher.log", ao lado do atalho, registra o que aconteceu.
 """
 
 
@@ -142,10 +172,16 @@ def main():
         os.makedirs(destino_dados, exist_ok=True)
         print("  extracoes/ (vazia — copie os dados para cá)")
 
-    print("\n[5/5] atalho e leia-me")
-    with open(os.path.join(DIST, "Explorador de Fallout.bat"), "w",
-              encoding="utf-8") as f:
-        f.write(ATALHO)
+    print("\n[5/5] atalhos e leia-me")
+    # cp1252: os .bat são lidos pelo cmd.exe, não por Python.
+    for nome, conteudo in [
+        ("Explorador de Fallout.bat", ATALHO),
+        ("Desbloquear arquivos.bat", DESBLOQUEAR),
+        ("Abrir no navegador.bat", NAVEGADOR),
+    ]:
+        with open(os.path.join(DIST, nome), "w", encoding="cp1252") as f:
+            f.write(conteudo)
+        print(f"  {nome}")
     with open(os.path.join(DIST, "LEIA-ME.txt"), "w", encoding="utf-8") as f:
         f.write(LEIAME)
 
