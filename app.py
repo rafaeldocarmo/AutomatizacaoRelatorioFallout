@@ -106,126 +106,12 @@ st.markdown("---")
 aba_consolidado, aba_distribuicao, aba_erros, aba_defeitos = st.tabs(["📊 Consolidado", "📋 Distribuição Fallout", "🔍 Análise de Erros", "🔗 Erros por Defeito"])
 
 with aba_consolidado:
-    _nome_dash = jornada_escolhida.replace(" + ", "_").replace(" ", "_")
-    _app_dir   = os.path.dirname(os.path.abspath(__file__))
-    _data_dir  = _base_dir()   # local: mesmo que _app_dir | Drive: pasta temporária
+    _data_dir = _base_dir()   # local: pasta do app | Drive: pasta temporária
 
-    # ── Botão: gerar relatório ────────────────────────────────────────────────
-    if st.button(f"🔄 Gerar relatório — {jornada_escolhida}"):
-        import subprocess, sys
-        with st.spinner(f"Gerando dashboard de {jornada_escolhida}..."):
-            _env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
-            _res = subprocess.run(
-                [sys.executable, os.path.join(_app_dir, "pipeline.py"), jornada_escolhida],
-                cwd=_data_dir,               # dados (extrações/ + xlsx) ficam aqui
-                capture_output=True, text=True,
-                encoding="utf-8", errors="replace", env=_env,
-            )
-        if _res.returncode == 0:
-            st.success("Relatório gerado com sucesso!")
-        else:
-            st.error("Erro ao gerar o relatório:")
-            st.code(_res.stderr[-3000:] if _res.stderr else _res.stdout[-3000:])
-
-    # Procura o PNG: primeiro na pasta de dados (onde o pipeline gera), depois na do app
-    dashboard_path = os.path.join(_data_dir, f"dashboard_{_nome_dash}.png")
-    if not os.path.exists(dashboard_path):
-        dashboard_path = os.path.join(_app_dir, f"dashboard_{_nome_dash}.png")
-    if os.path.exists(dashboard_path):
-        import base64
-        img_b64 = base64.b64encode(open(dashboard_path, "rb").read()).decode()
-        img_bytes = open(dashboard_path, "rb").read()
-        st.components.v1.html(f"""
-        <style>
-          * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-          body {{ font-family: sans-serif; background: #111; }}
-          #fs-controls {{ display: flex; gap: 8px; align-items: center; padding: 8px 12px;
-                          background: #222; position: sticky; top: 0; z-index: 10; }}
-          #fs-controls button {{ padding: 4px 14px; border: 1px solid #C0392B; background: #333;
-                                 color: #fff; border-radius: 4px; cursor: pointer; font-size: 15px; font-weight: bold; }}
-          #fs-controls button:hover {{ background: #C0392B; }}
-          #fs-controls span {{ color: #aaa; font-size: 13px; }}
-          #fs-container {{ overflow: auto; height: calc(100vh - 46px); cursor: grab; }}
-          #fs-container:active {{ cursor: grabbing; }}
-          #fs-img {{ transform-origin: top left; display: block; }}
-        </style>
-        <div id="fs-controls">
-          <button onclick="fsZoom(-0.2)">−</button>
-          <button onclick="fsZoom(0.2)">+</button>
-          <button onclick="fsFit()">Ajustar</button>
-          <span id="fs-zoom-level">100%</span>
-        </div>
-        <div id="fs-container">
-          <img id="fs-img" src="data:image/png;base64,{img_b64}" />
-        </div>
-        <script>
-          var fsScale = 1;
-          var fsImg = document.getElementById('fs-img');
-          var fsContainer = document.getElementById('fs-container');
-          function fsZoom(delta) {{
-            fsScale = Math.min(Math.max(fsScale + delta, 0.2), 5);
-            fsImg.style.transform = 'scale(' + fsScale + ')';
-            document.getElementById('fs-zoom-level').textContent = Math.round(fsScale * 100) + '%';
-          }}
-          function fsFit() {{
-            var ratio = (window.innerWidth - 20) / fsImg.naturalWidth;
-            fsScale = Math.round(ratio * 100) / 100;
-            fsImg.style.transform = 'scale(' + fsScale + ')';
-            document.getElementById('fs-zoom-level').textContent = Math.round(fsScale * 100) + '%';
-            fsContainer.scrollTop = 0; fsContainer.scrollLeft = 0;
-          }}
-          fsImg.onload = fsFit;
-          if (fsImg.complete) fsFit();
-        </script>
-        """, height=900)
-        col_dl1, col_dl2 = st.columns(2)
-        with col_dl1:
-            st.download_button("⬇ Baixar PNG", data=img_bytes,
-                               file_name=f"dashboard_{_nome_dash}.png", mime="image/png")
-        with col_dl2:
-            if st.button("📊 Gerar PowerPoint editável"):
-                from gerar_pptx import gerar_pptx
-                with st.spinner("Gerando PowerPoint..."):
-                    buf = gerar_pptx(jornada_escolhida, _data_dir)
-                st.session_state["pptx_bytes"] = buf.getvalue()
-                st.session_state["pptx_name"]  = f"relatorio_{_nome_dash}.pptx"
-            if st.session_state.get("pptx_bytes") and st.session_state.get("pptx_name") == f"relatorio_{_nome_dash}.pptx":
-                st.download_button(
-                    "⬇ Baixar PowerPoint", data=st.session_state["pptx_bytes"],
-                    file_name=st.session_state["pptx_name"],
-                    mime="application/vnd.openxmlformats-officedocument.presentationml.presentation")
-    else:
-        st.warning("Dashboard não encontrado. Clique em **Gerar relatório** acima.")
-
-    # ── Slide executivo de 3 colunas (independe da jornada selecionada) ───────
-    st.markdown("---")
-    st.markdown("**Slide executivo — Consolidado | Prospect | Base + Cross Sell**")
-    if st.button("🗂 Gerar slide de 3 colunas"):
-        from gerar_slide3col import extrair_todas, gerar_slide3col, gerar_slide3col_png
-        with st.spinner("Gerando slide de 3 colunas..."):
-            _d3 = extrair_todas(_data_dir)          # roda o pipeline uma só vez
-            st.session_state["s3col_bytes"] = gerar_slide3col(dados=_d3).getvalue()
-            st.session_state["s3col_png"]   = gerar_slide3col_png(dados=_d3).getvalue()
-
-    if st.session_state.get("s3col_png"):
-        st.image(st.session_state["s3col_png"], use_container_width=True)
-        _c1, _c2 = st.columns(2)
-        with _c1:
-            st.download_button(
-                "⬇ Baixar slide (PNG)", data=st.session_state["s3col_png"],
-                file_name="slide_3colunas.png", mime="image/png")
-        with _c2:
-            st.download_button(
-                "⬇ Baixar slide (PowerPoint)", data=st.session_state["s3col_bytes"],
-                file_name="slide_3colunas.pptx",
-                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation")
-
-    # ── PowerPoint completo: 3 colunas + Top Ofensores + um slide por jornada ──
-    st.markdown("---")
     st.markdown("**PowerPoint completo — 3 colunas + Top Ofensores + um slide por jornada**")
     if st.button("📑 Gerar PowerPoint completo"):
         from gerar_slide3col import gerar_pptx_completo
-        with st.spinner("Gerando PowerPoint completo (isso lê todos os dados de novo, pode levar um tempo)..."):
+        with st.spinner("Gerando PowerPoint completo (isso lê todos os dados, pode levar um tempo)..."):
             pptx_bytes = gerar_pptx_completo(_data_dir).getvalue()
         _PPTX_MIME = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
         disparar_download(pptx_bytes, "relatorio_completo.pptx", _PPTX_MIME)

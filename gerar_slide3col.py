@@ -1,15 +1,13 @@
 # -*- coding: utf-8 -*-
-"""Slide de 3 colunas (Consolidado | Prospect | Base + Cross Sell) em PowerPoint
-editável: tabelas nativas + gráficos como imagem.
+"""Relatório completo em PowerPoint editável (tabelas nativas + gráficos como
+imagem): slide de 3 colunas, slide "Top Ofensores" e um slide por jornada.
 
-Uso como módulo:  from gerar_slide3col import gerar_slide3col
-                  buf = gerar_slide3col(base_dir)
-Uso via CLI:      python gerar_slide3col.py
+Uso como módulo:  from gerar_slide3col import gerar_pptx_completo
+                  buf = gerar_pptx_completo(base_dir)
 """
-import os, sys, io, tempfile, contextlib
+import os, io, tempfile, contextlib
 import matplotlib
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
@@ -23,8 +21,8 @@ from pptx.dml.color import RGBColor
 import fallout_core
 import pipeline
 import gerar_pptx
-from gerar_pptx import (RED, WHITE, GRAY, GRAY2, FG,
-                        _cell, _widths, _rowh, _no_style, _sem_bordas, _borda_clara)
+from gerar_pptx import (RED, WHITE, GRAY, FG,
+                        _cell, _widths, _rowh, _no_style, _sem_bordas)
 
 COLUNAS = [("Consolidado",       "Consolidado"),
            ("Prospect",          "Prospect PF"),
@@ -249,16 +247,6 @@ def _montar_slide3col(prs, dados):
         _sem_bordas(t)
 
 
-def gerar_slide3col(base_dir=".", dados=None):
-    """Gera um PPTX contendo só o slide de 3 colunas. Devolve os bytes (BytesIO)."""
-    dados = dados or extrair_todas(base_dir)
-    prs = Presentation()
-    prs.slide_width, prs.slide_height = Inches(13.333), Inches(7.5)
-    _montar_slide3col(prs, dados)
-    buf = io.BytesIO(); prs.save(buf); buf.seek(0)
-    return buf
-
-
 def gerar_pptx_completo(base_dir=".", dados_3col=None):
     """
     PPTX único:
@@ -289,127 +277,3 @@ def gerar_pptx_completo(base_dir=".", dados_3col=None):
 
     buf = io.BytesIO(); prs.save(buf); buf.seek(0)
     return buf
-
-
-# ── Montagem: PNG ───────────────────────────────────────────────────────────
-COR_RED  = "#C0392B"; COR_GRAY = "#F2F2F2"; COR_FG = "#222222"
-
-
-def gerar_slide3col_png(base_dir=".", dados=None):
-    """Mesmo slide em PNG (16x9). Devolve BytesIO."""
-    dados = dados or extrair_todas(base_dir)
-
-    fig = Figure(figsize=(16, 9))
-    FigureCanvasAgg(fig)
-    fig.patch.set_facecolor(COR_BRANCO)
-    ax = fig.add_axes([0, 0, 1, 1]); ax.set_xlim(0, 16); ax.set_ylim(0, 9); ax.axis("off")
-
-    ax.add_patch(plt.Rectangle((0, 8.42), 16, 0.58, facecolor=COR_RED))
-    ax.text(8, 8.71, "Realização e Projeção de Fallout", ha="center", va="center",
-            fontsize=19, fontweight="bold", color=COR_BRANCO)
-    corte = list(dados.values())[0]["corte"]
-    ax.text(0.15, 8.24, f"Data de Corte: {corte.strftime('%d/%b')}", ha="left", va="center",
-            fontsize=8.5, fontweight="bold", fontstyle="italic", color=COR_FG)
-
-    M, GAP = 0.15, 0.28
-    CW = (16 - 2*M - 2*GAP) / 3
-    XS = [M + i*(CW + GAP) for i in range(3)]
-
-    def cell(x, y, w, h, txt, bg, fg=COR_FG, bold=False, fs=6.5, align="center"):
-        ax.add_patch(plt.Rectangle((x, y), w, h, facecolor=bg,
-                                   edgecolor=COR_BRANCO, linewidth=0.5))
-        if txt == "":
-            return
-        xt = x + w/2 if align == "center" else (x + 0.06 if align == "left" else x + w - 0.06)
-        ax.text(xt, y + h/2, txt, ha=align, va="center", fontsize=fs, color=fg,
-                fontweight="bold" if bold else "normal")
-
-    Y_TAB, Y_FUNDO, GAP_BL = 5.62, 0.16, 0.07
-    FD, FT = 8.5, 9.5
-
-    def n_lin(ci, d):
-        n = (2 + len(d["volume"]["rows"])) if ci > 0 else 0
-        n += 1 + len(d["dist"]["rows"])
-        n += 1 + sum(len(r["dfts"]) for r in d["plan"]["rows"])
-        return n
-
-    max_lin = max(n_lin(ci, dados[j]) for ci, (j, _) in enumerate(COLUNAS))
-    RH = min(0.212, (Y_TAB - Y_FUNDO - 2*GAP_BL) / max_lin)
-
-    for ci, (jornada, titulo) in enumerate(COLUNAS):
-        d = dados[jornada]; x0 = XS[ci]
-        if ci > 0:
-            ax.plot([x0 - GAP/2, x0 - GAP/2], [0.15, 8.30], color=COR_SEP,
-                    linewidth=1.2, linestyle=(0, (4, 4)))
-        ax.text(x0 + CW/2, 8.22, titulo, ha="center", va="center",
-                fontsize=14.5, fontweight="bold", color=COR_FG)
-
-        # gráfico da coluna (reaproveita o mesmo desenho do PPTX)
-        tmp_png = os.path.join(tempfile.mkdtemp(prefix="s3col_"), f"c{ci}.png")
-        _chart_png(d["chart"], tmp_png, CW - 0.10, 1.95)
-        img = plt.imread(tmp_png)
-        axi = fig.add_axes([(x0 + 0.05)/16, 6.02/9, (CW - 0.10)/16, 1.95/9])
-        axi.imshow(img); axi.axis("off")
-
-        y = Y_TAB
-        if ci > 0:                                   # Volume de Pedidos
-            v = d["volume"]; n = len(v["months"]); lw_ = CW * 0.40; cw_ = (CW - lw_) / n
-            cell(x0, y - RH, CW, RH, "Volume de Pedidos", COR_RED, COR_BRANCO, True, FT)
-            y -= RH
-            cell(x0, y - RH, lw_, RH, "", COR_RED)
-            for i, m in enumerate(v["months"]):
-                cell(x0 + lw_ + i*cw_, y - RH, cw_, RH, m, COR_RED, COR_BRANCO, True, FD)
-            y -= RH
-            for ri, (lbl, vals) in enumerate(v["rows"]):
-                bg = COR_BRANCO if ri % 2 == 0 else COR_GRAY
-                cell(x0, y - RH, lw_, RH, lbl, bg, fs=FD, align="left")
-                for i, val in enumerate(vals):
-                    cell(x0 + lw_ + i*cw_, y - RH, cw_, RH, val, bg, fs=FD)
-                y -= RH
-            y -= GAP_BL
-
-        # Distribuição Fallout
-        cell(x0, y - RH, CW, RH,
-             f"Distribuição Fallout ({d['dist']['pct']:.2f}%)".replace(".", ","),
-             COR_RED, COR_BRANCO, True, FT)
-        y -= RH
-        VW = CW * 0.26
-        for ri, (lbl, val, sub, _b) in enumerate(d["dist"]["rows"]):
-            bg = COR_BRANCO if ri % 2 == 0 else COR_GRAY
-            # toda a Distribuição em negrito
-            cell(x0, y - RH, CW - VW, RH, lbl, bg, fs=FD, bold=True,
-                 align="right" if sub else "left")
-            cell(x0 + CW - VW, y - RH, VW, RH, val, bg, fs=FD, bold=True, align="right")
-            y -= RH
-        y -= GAP_BL
-
-        # Planejamento Redução
-        cell(x0, y - RH, CW, RH,
-             f"Planejamento Redução ({d['plan']['pct']:.2f}%)".replace(".", ","),
-             COR_RED, COR_BRANCO, True, FT)
-        y -= RH
-        DW, PW = CW*0.30, CW*0.22; FW = CW - DW - PW
-        for ri, r in enumerate(d["plan"]["rows"]):
-            h = RH * len(r["dfts"])
-            bg = COR_BRANCO if ri % 2 == 0 else COR_GRAY
-            cell(x0, y - h, DW, h, r["date"], bg, fs=FD)
-            cell(x0 + DW, y - h, FW, h, "", bg)
-            for k, dft in enumerate(r["dfts"]):
-                ax.text(x0 + DW + FW/2, y - RH*(k + 0.5), dft, ha="center", va="center",
-                        fontsize=FD, color=COR_FG, fontweight="bold")
-            cell(x0 + DW + FW, y - h, PW, h, r["pct"], bg, fs=FD, bold=True)
-            y -= h
-
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=150, facecolor=COR_BRANCO)
-    buf.seek(0)
-    return buf
-
-
-if __name__ == "__main__":
-    _d = extrair_todas(".")
-    with open("slide_3colunas.pptx", "wb") as f:
-        f.write(gerar_slide3col(dados=_d).getbuffer())
-    with open("slide_3colunas.png", "wb") as f:
-        f.write(gerar_slide3col_png(dados=_d).getbuffer())
-    print("Salvos: slide_3colunas.pptx e slide_3colunas.png")

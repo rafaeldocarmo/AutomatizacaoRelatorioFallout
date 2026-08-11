@@ -1,21 +1,15 @@
 # -*- coding: utf-8 -*-
-"""Gera o relatório em PowerPoint editável (tabelas nativas + gráfico como imagem)
-para uma jornada, reaproveitando a lógica do pipeline.py.
-
-Uso como módulo:  from gerar_pptx import gerar_pptx; buf = gerar_pptx("Base Móvel", base_dir)
-Uso via CLI:      python gerar_pptx.py "Base Móvel"
+"""Blocos de montagem dos slides em PowerPoint editável (tabelas nativas +
+gráfico como imagem), consumidos por gerar_slide3col.gerar_pptx_completo().
 """
-import os, sys, io, tempfile, contextlib
+import os, tempfile
 import matplotlib
 matplotlib.use("Agg")
-from pptx import Presentation
 from pptx.util import Inches, Pt
 from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
 from pptx.oxml.ns import qn, nsdecls
 from pptx.oxml import parse_xml
-
-import pipeline
 
 RED = RGBColor(0xC0, 0x39, 0x2B); WHITE = RGBColor(0xFF, 0xFF, 0xFF)
 GRAY = RGBColor(0xF2, 0xF2, 0xF2); GRAY2 = RGBColor(0xF5, 0xF5, 0xF5)
@@ -23,18 +17,9 @@ FG = RGBColor(0x22, 0x22, 0x22)
 
 
 # ── Extração dos dados via pipeline ──────────────────────────────────────────
-def _extrair(jornada, base_dir):
-    """Roda pipeline.gerar_relatorio() e devolve (data, caminho_chart_png)."""
-    # redireciona stdout p/ buffer unicode (evita crash de cp1252 com os prints ✓/→)
-    with contextlib.redirect_stdout(io.StringIO()):
-        ns = pipeline.gerar_relatorio(base_dir, jornada)
-    return _montar_dados(jornada, ns)
-
-
 def _montar_dados(jornada, ns):
     """Monta (data, caminho_chart_png) a partir de um resultado já calculado
-    por pipeline.gerar_relatorio() — evita recalcular a mesma jornada duas vezes
-    quando ela já foi usada em outro slide (ex.: Top Ofensores)."""
+    por pipeline.gerar_relatorio()."""
     import pandas as pd
     resumo = ns["resumo"]; ML = ns["MESES_LABEL"]; reducao = ns["reducao"]
     meses_vol = ns["meses_vol"]
@@ -338,22 +323,3 @@ def _montar_slide_top_ofensores(prs, ns_consolidado, ns_por_jornada, top_n=15):
             _cell(tbl.cell(row_idx, 2 + ci), val, fs, bg=bg, align=al)
 
     _sem_bordas(tbl)
-
-
-def gerar_pptx(jornada, base_dir="."):
-    """Gera o relatório PPTX da jornada e devolve os bytes (BytesIO)."""
-    data, chart_png = _extrair(jornada, base_dir)
-    prs = Presentation()
-    prs.slide_width = Inches(13.333); prs.slide_height = Inches(7.5)
-    _montar_slide(prs, data, chart_png)
-    buf = io.BytesIO(); prs.save(buf); buf.seek(0)
-    return buf
-
-
-if __name__ == "__main__":
-    j = sys.argv[1] if len(sys.argv) > 1 else "Base Móvel"
-    out = f"relatorio_{j.replace(' + ', '_').replace(' ', '_')}.pptx"
-    buf = gerar_pptx(j, ".")
-    with open(out, "wb") as f:
-        f.write(buf.getbuffer())
-    print("Salvo:", out)

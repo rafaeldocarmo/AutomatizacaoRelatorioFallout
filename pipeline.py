@@ -9,7 +9,6 @@ for _s in (sys.stdout, sys.stderr):
         pass
 
 import calendar as _cal
-import os
 
 import pandas as pd
 from matplotlib.backends.backend_agg import FigureCanvasAgg
@@ -18,9 +17,6 @@ import matplotlib.ticker as mticker
 
 import fallout_core
 from fallout_core import FASES_CORRIGIDO, FASES_MOPS, MESES_LABEL, MESES_PT
-
-# Uso: python pipeline.py "Base Móvel"   ou   python pipeline.py "Cross Sell"
-# Uso: python pipeline.py "Consolidado"  → combina TODAS as jornadas disponíveis
 
 
 def gerar_relatorio(base_dir, jornada):
@@ -875,11 +871,3 @@ def _rect(x, y, w, h, **kwargs):
     """Retângulo desenhável em qualquer Axes (equivalente ao antigo plt.Rectangle)."""
     from matplotlib.patches import Rectangle
     return Rectangle((x, y), w, h, **kwargs)
-
-
-if __name__ == "__main__":
-    jornada_cli = sys.argv[1] if len(sys.argv) > 1 else "Base Móvel"
-    resultado = gerar_relatorio(os.getcwd(), jornada_cli)
-    nome_arquivo = f"dashboard_{jornada_cli.replace(' + ', '_').replace(' ', '_')}.png"
-    resultado["fig"].savefig(nome_arquivo, dpi=150, bbox_inches="tight", pad_inches=0.1)
-    print(f"Dashboard consolidado salvo em {nome_arquivo}")
