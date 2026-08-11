@@ -75,7 +75,7 @@ def _montar_dados(jornada, ns):
             "US" if tipo == "User Story" else "Defeito",
             fmt_id({"DefectNumber__c": row["DefectNumber__c"], "DFT_BugfixMilestone": row["DFT_BugfixMilestone"]}),
             fmt_ms(row["DFT_BugfixMilestone"]),
-            str(row["DFT_Name"])[:80] if pd.notna(row["DFT_Name"]) else "",
+            str(row["DFT_Name"]) if pd.notna(row["DFT_Name"]) else "",
             str(row["DFT_Team"])[:35] if pd.notna(row["DFT_Team"]) else "",
             str(row["DFT_Phase"])[:25] if pd.notna(row["DFT_Phase"]) else "",
         ]
@@ -224,10 +224,13 @@ def _montar_slide(prs, d, chart_png):
     cols = d["detalhe"]["cols"]; drows = d["detalhe"]["rows"]
     dety = max(left_bottom, chart_bottom) + GAP
     n = 1 + len(drows)
-    rh = max(0.085, min(0.24, (7.42 - dety) / n))
-    if rh >= 0.15:   f_base, f_nome, f_sec = 7.0, 5.5, 6.2
-    elif rh >= 0.11: f_base, f_nome, f_sec = 6.0, 5.0, 5.5
-    else:            f_base, f_nome, f_sec = 5.2, 4.4, 4.8
+    # Nomes de defeito não são mais truncados e podem quebrar linha (word_wrap
+    # já ligado em _cell) — o PowerPoint cresce a linha automaticamente para
+    # caber o texto, então a altura calculada aqui é só um ponto de partida.
+    rh = max(0.11, min(0.32, (7.42 - dety) / n))
+    if rh >= 0.20:   f_base, f_nome, f_sec = 11.0, 10.0, 10.5
+    elif rh >= 0.15: f_base, f_nome, f_sec = 9.0, 8.0, 8.5
+    else:            f_base, f_nome, f_sec = 7.5, 6.5, 7.0
     ws = [0.95, 1.5, 0.7, 0.95, 1.15, 3.55, 1.7, 1.4]
     ws += [(13.0 - sum(ws)) / len(cols[8:])] * len(cols[8:])
     dt2 = add_tbl(n, len(cols), 0.18, dety, 13.0, rh * n)
@@ -241,7 +244,7 @@ def _montar_slide(prs, d, chart_png):
             fs = f_nome if ci == 5 else (f_sec if ci in (1, 6, 7) else f_base)
             bold = (ci == 0 and (row["kind"] == "sucesso" or val == "Falha"))
             _cell(dt2.cell(ri + 1, ci), val, fs, bold=bold, bg=bg, align=al)
-    _borda_clara(dt2)   # bordas finas em cinza claro (igual ao PNG)
+    _sem_bordas(dt2)
 
 
 # ── Slide "Top Ofensores": Top N defeitos/US de todas as jornadas juntas ────
@@ -273,7 +276,7 @@ def _montar_slide_top_ofensores(prs, ns_consolidado, ns_por_jornada, top_n=15):
             id_str = fmt_id({"DefectNumber__c": row["DefectNumber__c"],
                               "DFT_BugfixMilestone": row["DFT_BugfixMilestone"]})
             ms_fmt = fmt_ms(row["DFT_BugfixMilestone"])
-            nome = str(row["DFT_Name"])[:80] if pd.notna(row["DFT_Name"]) else ""
+            nome = str(row["DFT_Name"]) if pd.notna(row["DFT_Name"]) else ""
             team = str(row["DFT_Team"])[:35] if pd.notna(row["DFT_Team"]) else ""
             phase = str(row["DFT_Phase"])[:25] if pd.notna(row["DFT_Phase"]) else ""
             valores = [pct_m(int(row.loc[m]) if m in row.index else 0, m) for m in meses_tab]
@@ -302,35 +305,39 @@ def _montar_slide_top_ofensores(prs, ns_consolidado, ns_por_jornada, top_n=15):
 
     n_data = 1 + len(top_linhas)          # linha Sucesso + top N linhas de falha
     n_total = 1 + n_data                  # + cabeçalho
-    rh = max(0.24, min(0.42, 6.4 / max(n_data, 1)))
+    # Nomes de defeito não são mais truncados e podem quebrar linha — a altura
+    # calculada aqui é só um ponto de partida (o PowerPoint cresce a linha
+    # automaticamente para caber o texto).
+    rh = max(0.30, min(0.55, 6.4 / max(n_data, 1)))
     y = 0.68
+    FS_BASE, FS_SEC = 10.0, 9.0   # fontes no maior tamanho possível para essa tabela
 
     tbl = add_tbl(n_total, len(COLS), 0.18, y, 13.0, rh * n_total)
     _widths(tbl, ws); _rowh(tbl, rh)
 
     for ci, col in enumerate(COLS):
-        _cell(tbl.cell(0, ci), col, 7.0, bold=True, fg=WHITE, bg=RED)
+        _cell(tbl.cell(0, ci), col, FS_BASE, bold=True, fg=WHITE, bg=RED)
 
     # ── Linha Sucesso (taxa consolidada, todas as jornadas somadas) ────────
-    _cell(tbl.cell(1, 0), "Sucesso", 7.0, bg=WHITE)
+    _cell(tbl.cell(1, 0), "Sucesso", FS_BASE, bg=WHITE)
     for ci in range(1, len(COLS) - len(labels_tab)):
-        _cell(tbl.cell(1, ci), "", 7.0, bg=WHITE)
+        _cell(tbl.cell(1, ci), "", FS_BASE, bg=WHITE)
     for li, m in enumerate(meses_tab):
         suc_pct = pct_m_consolidado(resumo.loc[m, "Sucessos"] if m in resumo.index else 0, m)
-        _cell(tbl.cell(1, len(COLS) - len(labels_tab) + li), f"{suc_pct:.2f}%".replace(".", ","), 7.0, bg=WHITE)
+        _cell(tbl.cell(1, len(COLS) - len(labels_tab) + li), f"{suc_pct:.2f}%".replace(".", ","), FS_BASE, bg=WHITE)
 
     # ── Linhas do Top N ──────────────────────────────────────────────────
     for ri, cells in enumerate(top_linhas):
         row_idx = 2 + ri
         bg = WHITE if ri % 2 == 0 else GRAY2
-        _cell(tbl.cell(row_idx, 0), "Falha" if ri == 0 else "", 7.0, bg=bg, bold=(ri == 0))
-        _cell(tbl.cell(row_idx, 1), "Em Tratamento/Avaliação\npela Squad" if ri == 0 else "", 6.2, bg=bg)
+        _cell(tbl.cell(row_idx, 0), "Falha" if ri == 0 else "", FS_BASE, bg=bg, bold=(ri == 0))
+        _cell(tbl.cell(row_idx, 1), "Em Tratamento/Avaliação\npela Squad" if ri == 0 else "", FS_SEC, bg=bg)
         for ci, val in enumerate(cells):
             al = "left" if ci == 4 else "center"       # 4 = Nome Defeito
-            fs = 5.5 if ci == 4 else (6.2 if ci in (0, 5, 6) else 7.0)
+            fs = FS_SEC if ci in (0, 5, 6) else FS_BASE
             _cell(tbl.cell(row_idx, 2 + ci), val, fs, bg=bg, align=al)
 
-    _borda_clara(tbl)
+    _sem_bordas(tbl)
 
 
 def gerar_pptx(jornada, base_dir="."):
