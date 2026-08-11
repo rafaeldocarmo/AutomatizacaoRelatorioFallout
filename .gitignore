@@ -8,3 +8,5 @@ __pycache__/
 .env
 *.json
 .streamlit/secrets.toml
+dist/
+launcher.log
