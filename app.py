@@ -7,6 +7,162 @@ from fallout_core import MESES_PT
 
 st.set_page_config(page_title="Fallout Explorer", layout="wide")
 
+# ── Design system "Modernist" (apenas visual) ─────────────────────────────────
+# Tokens espelhados de _ds/modernist/styles.css: Archivo, raio 0, réguas de 2px,
+# hierarquia por alinhamento e divisores em vez de sombra/cor decorativa.
+COR_BG        = "#f3f2f2"
+COR_SURFACE   = "#eae9e9"
+COR_TEXT      = "#201e1d"
+COR_ACCENT    = "#ec3013"
+COR_ACC_100   = "#fff2ef"
+COR_ACC_500   = "#ff563c"
+COR_ACC_600   = "#dd2b0f"
+COR_ACC_700   = "#ae1800"
+COR_ACC_800   = "#7c1405"
+COR_DIVIDER   = "rgba(32,30,29,.40)"
+COR_MUTED     = "rgba(32,30,29,.55)"
+COR_MUTED_2   = "rgba(32,30,29,.68)"
+FONTE         = '"Archivo", system-ui, sans-serif'
+
+st.markdown(f"""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;800&display=swap');
+
+/* — base — */
+[data-testid="stAppViewContainer"] {{ background: {COR_BG}; }}
+[data-testid="stHeader"] {{ background: transparent; }}
+[data-testid="stMain"] .block-container {{ padding-top: 2.2rem; max-width: 1500px; }}
+html, body, [class*="css"], [data-testid="stAppViewContainer"] * {{
+  font-family: {FONTE};
+  color: {COR_TEXT};
+}}
+/* Streamlit estiliza os headings com seletor mais específico — daí o !important */
+h1, h2, h3, h4, h5, h6,
+[data-testid="stHeading"] h1, [data-testid="stHeading"] h2, [data-testid="stHeading"] h3,
+[data-testid="stMarkdownContainer"] h1, [data-testid="stMarkdownContainer"] h2,
+[data-testid="stMarkdownContainer"] h3, [data-testid="stMarkdownContainer"] h4 {{
+  font-family: {FONTE} !important; font-weight: 800 !important;
+  letter-spacing: -.015em; line-height: 1.12;
+}}
+
+/* — réguas de 2px em vez de linha fina (Streamlit fixa height:1px) — */
+hr, [data-testid="stMarkdownContainer"] hr {{
+  border: 0 !important; height: 2px !important; background: {COR_DIVIDER} !important;
+  margin: 1.1rem 0;
+}}
+
+/* — botões: retângulos sem raio; primário na cor de acento — */
+.stButton > button, .stDownloadButton > button {{
+  border-radius: 0; border: 1px solid {COR_DIVIDER}; background: transparent;
+  color: {COR_TEXT}; font-family: {FONTE}; font-weight: 600; font-size: 13px;
+  padding: .55rem 1.1rem; box-shadow: none; transition: background .12s ease;
+}}
+.stButton > button:hover, .stDownloadButton > button:hover {{
+  background: rgba(32,30,29,.07); border-color: {COR_DIVIDER}; color: {COR_TEXT};
+}}
+.stButton > button:active, .stDownloadButton > button:active {{ background: rgba(32,30,29,.14); }}
+.stButton > button:focus, .stDownloadButton > button:focus {{ box-shadow: none; color: {COR_TEXT}; }}
+.stDownloadButton > button {{ background: {COR_ACCENT}; border-color: {COR_ACCENT}; color: #fff; }}
+.stDownloadButton > button:hover {{ background: {COR_ACC_600}; border-color: {COR_ACC_600}; color: #fff; }}
+.stDownloadButton > button p {{ color: #fff !important; }}
+
+/* — abas: sublinhado de 3px, sem pílula — */
+.stTabs [data-baseweb="tab-list"] {{
+  gap: 8px; border-bottom: 2px solid {COR_DIVIDER}; background: transparent;
+}}
+.stTabs [data-baseweb="tab"] {{
+  border-radius: 0; background: transparent; padding: 14px 18px 12px;
+  font-family: {FONTE}; font-weight: 600; font-size: 14px; color: {COR_MUTED};
+}}
+.stTabs [aria-selected="true"] {{ color: {COR_TEXT}; }}
+.stTabs [data-baseweb="tab-highlight"] {{ background: {COR_ACC_700}; height: 3px; }}
+.stTabs [data-baseweb="tab-border"] {{ display: none; }}
+
+/* — campos: raio 0, superfície plana — */
+[data-baseweb="select"] > div, .stTextInput input, .stDateInput input,
+.stNumberInput input, [data-baseweb="input"] {{
+  border-radius: 0 !important; background: {COR_SURFACE} !important;
+  border: 1px solid {COR_DIVIDER} !important; font-size: 14px;
+}}
+[data-baseweb="select"] > div:hover, .stTextInput input:hover {{ border-color: rgba(32,30,29,.45) !important; }}
+[data-baseweb="popover"] li, [data-baseweb="menu"] {{ border-radius: 0 !important; font-family: {FONTE}; }}
+.stTextInput label, .stDateInput label, .stSelectbox label,
+.stNumberInput label, .stRadio label {{
+  font-size: 12px !important; font-weight: 600 !important; color: {COR_MUTED_2} !important;
+  text-transform: uppercase; letter-spacing: .06em;
+}}
+.stRadio [role="radiogroup"] {{ gap: 14px; }}
+
+/* — expanders: caixa reta com régua — */
+[data-testid="stExpander"] {{
+  border: 1px solid {COR_DIVIDER}; border-radius: 0; background: #fff; margin-bottom: 2px;
+}}
+[data-testid="stExpander"] summary {{ border-radius: 0; font-family: {FONTE}; padding: .6rem .9rem; }}
+[data-testid="stExpander"] summary:hover {{ background: rgba(32,30,29,.04); }}
+
+/* — dataframe — */
+[data-testid="stDataFrame"] {{ border: 1px solid {COR_DIVIDER}; border-radius: 0; }}
+
+/* — alertas — */
+[data-testid="stAlert"] {{ border-radius: 0; }}
+
+/* — sparkline e tiles de KPI — */
+.kpi-row {{ display: flex; gap: 2px; }}
+.kpi-tile {{ flex: 1; padding: 16px 18px; }}
+.kpi-label {{
+  font-weight: 600; font-size: 10px; letter-spacing: .08em; text-transform: uppercase;
+}}
+.kpi-value {{ font-weight: 800; font-size: 28px; line-height: 1.1; }}
+.kpi-delta {{ font-weight: 600; font-size: 11px; }}
+.kpi-spark {{ display: flex; gap: 2px; align-items: flex-end; height: 18px; margin-top: 10px; }}
+.kpi-foot {{ font-size: 10px; margin-top: 8px; }}
+.chip {{
+  display: inline-flex; align-items: center; padding: 4px 10px; margin: 0 6px 6px 0;
+  background: {COR_SURFACE}; font: 600 11px ui-monospace, SFMono-Regular, Menlo, monospace;
+}}
+.raw-msg {{
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; color: {COR_MUTED_2};
+  padding: 8px 12px; border-left: 2px solid {COR_ACC_700}; background: {COR_SURFACE};
+  margin-bottom: 12px; word-break: break-word;
+}}
+</style>
+""", unsafe_allow_html=True)
+
+
+def _sparkline(valores, cor, altura_max=18):
+    """Barras inline representando a série já calculada (puramente visual)."""
+    vals = [v for v in valores if pd.notna(v)]
+    if not vals:
+        return ""
+    topo = max(vals) or 1
+    barras = "".join(
+        f"<div style='width:6px;background:{cor};"
+        f"height:{max(2, round(v / topo * altura_max))}px'></div>"
+        for v in vals
+    )
+    return f"<div class='kpi-spark'>{barras}</div>"
+
+
+def _kpi_tile(label, valor, delta_txt, delta_up, serie, destaque, rodape=""):
+    """Tile de KPI no estilo Modernist. Recebe valores já calculados."""
+    bg    = COR_ACC_100 if destaque else COR_SURFACE
+    c_lbl = COR_ACC_800 if destaque else COR_MUTED
+    c_val = COR_ACC_800 if destaque else COR_TEXT
+    c_dlt = COR_ACC_700 if destaque else COR_MUTED
+    c_spk = COR_ACC_500 if destaque else "rgba(32,30,29,.30)"
+    seta  = "▲" if delta_up else "▼"
+    delta_html = (f"<div class='kpi-delta' style='color:{c_dlt}'>{seta} {delta_txt}</div>"
+                  if delta_txt else "")
+    rodape_html = f"<div class='kpi-foot' style='color:{c_lbl}'>{rodape}</div>" if rodape else ""
+    return (
+        f"<div class='kpi-tile' style='background:{bg}'>"
+        f"<div class='kpi-label' style='color:{c_lbl}'>{label}</div>"
+        f"<div style='display:flex;align-items:baseline;gap:8px;margin-top:6px'>"
+        f"<div class='kpi-value' style='color:{c_val}'>{valor}</div>{delta_html}</div>"
+        f"{_sparkline(serie, c_spk)}{rodape_html}</div>"
+    )
+
+
 # ── Leitura de dados (cache) ──────────────────────────────────────────────────
 def _base_dir():
     """Retorna o diretório base dos arquivos (Drive ou local)."""
@@ -22,6 +178,19 @@ def listar_jornadas():
     if len(jornadas) > 1:
         opcoes.append("Consolidado")   # todas as jornadas juntas
     return opcoes
+
+
+def jornadas_kpi():
+    """
+    Jornadas de negócio exibidas nos KPIs do topo: cada pasta solta vira uma
+    jornada e as pastas Base Móvel + Cross Sell contam como a combinada
+    "Base + Cross Sell". Cresce sozinha conforme novas pastas aparecerem.
+    """
+    jornadas = fallout_core.jornadas_disponiveis(_base_dir())
+    par_combo = {"Base Móvel", "Cross Sell"}
+    tem_combo = par_combo.issubset(set(jornadas))
+    soltas = sorted(j for j in jornadas if not (tem_combo and j in par_combo))
+    return soltas + (["Base + Cross Sell"] if tem_combo else [])
 
 @st.cache_data(show_spinner="Carregando dados...")
 def carregar_dados(jornada: str):
@@ -56,27 +225,25 @@ def disparar_download(data: bytes, file_name: str, mime: str):
     """, height=0)
 
 # ── Interface ──────────────────────────────────────────────────────────────────
-st.markdown("""
-<div style='background:#C0392B;padding:18px 24px;border-radius:6px;margin-bottom:16px'>
-  <span style='color:white;font-size:22px;font-weight:700'>
-    Explorador de Fallout
-  </span>
-</div>
-""", unsafe_allow_html=True)
+st.markdown(
+    f"<div style='font:600 11px/1 {FONTE};letter-spacing:.14em;text-transform:uppercase;"
+    f"color:{COR_ACC_700};margin-bottom:6px'>Painel de acompanhamento</div>"
+    f"<h2 style='margin:0 0 20px;font-size:30px'>Explorador de Fallout</h2>",
+    unsafe_allow_html=True,
+)
 
 jornadas = listar_jornadas()
-col_jornada, col_sel, col_info, col_info2 = st.columns([2, 2, 2, 2])
+
+# ── Faixa 1: fallout por jornada + ações ──────────────────────────────────────
+# Container reservado aqui e preenchido no fim: o conteúdo depende do mês
+# escolhido no seletor abaixo, mas precisa aparecer acima dele.
+faixa_topo = st.container()
+
+# ── Faixa 2: filtros globais ──────────────────────────────────────────────────
+_f_vazio, col_sel, col_jornada = st.columns([4, 1.6, 1.9])
 with col_jornada:
     jornada_escolhida = st.selectbox("Jornada", options=jornadas,
                                       index=jornadas.index("Base Móvel") if "Base Móvel" in jornadas else 0)
-
-with st.sidebar:
-    st.markdown("### Dados")
-    if st.button("🔄 Atualizar dados do Drive"):
-        st.cache_data.clear()
-        st.success("Cache limpo. Recarregando dados mais recentes...")
-        st.rerun()
-    st.caption("Os dados são cacheados por até 30 min. Use o botão acima após atualizar os arquivos no Drive.")
 
 df, resumo = carregar_dados(jornada_escolhida)
 meses_disp = sorted(df["Mes"].unique().tolist())
@@ -95,30 +262,120 @@ fallout_pct = resumo.loc[mes_escolhido, "Falhas"] / total_mes * 100 if mes_escol
 
 df_mes, cats, _ = fallout_core.categorizar(df, mes_escolhido)
 
-with col_info:
-    st.metric("Total de pedidos no mês", f"{total_mes:,}")
-with col_info2:
-    st.metric("Fallout Rate", f"{fallout_pct:.2f}%")
+# ── Tiles de KPI (valores já calculados acima / colunas já existentes) ────────
+_meses_ord = sorted(resumo.index.tolist())
+_mes_ant   = ([m for m in _meses_ord if m < mes_escolhido] or [None])[-1]
 
-st.markdown("---")
 
-# ── Aba: Consolidado / Distribuição ──────────────────────────────────────────
-aba_consolidado, aba_distribuicao, aba_erros, aba_defeitos = st.tabs(["📊 Consolidado", "📋 Distribuição Fallout", "🔍 Análise de Erros", "🔗 Erros por Defeito"])
+def _num_br(valor, casas=0):
+    """Formata no padrão pt-BR: milhar com '.' e decimal com ','."""
+    return f"{valor:,.{casas}f}".replace(",", "\x00").replace(".", ",").replace("\x00", ".")
 
-with aba_consolidado:
-    _data_dir = _base_dir()   # local: pasta do app | Drive: pasta temporária
 
-    st.markdown("**PowerPoint completo — 3 colunas + Top Ofensores + um slide por jornada**")
-    if st.button("📑 Gerar PowerPoint completo"):
-        from gerar_slide3col import gerar_pptx_completo
-        with st.spinner("Gerando PowerPoint completo (isso lê todos os dados, pode levar um tempo)..."):
-            pptx_bytes = gerar_pptx_completo(_data_dir).getvalue()
-        _PPTX_MIME = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-        disparar_download(pptx_bytes, "relatorio_completo.pptx", _PPTX_MIME)
-        st.success("PowerPoint completo gerado — o download deve começar automaticamente.")
+def _delta(coluna, casas=0, sufixo=""):
+    """Variação vs. mês anterior sobre valores que o resumo já traz."""
+    if _mes_ant is None or mes_escolhido not in resumo.index:
+        return "", False
+    atual, anterior = resumo.loc[mes_escolhido, coluna], resumo.loc[_mes_ant, coluna]
+    dif = atual - anterior
+    return _num_br(abs(dif), casas) + sufixo, dif > 0
+
+
+_serie_pct = [resumo.loc[m, "Pct"] for m in _meses_ord]
+_d_pct, _up_pct = _delta("Pct", 2, "pp")
+_d_tot, _up_tot = _delta("Total")
+_d_suc, _up_suc = _delta("Sucessos")
+_d_fal, _up_fal = _delta("Falhas")
+
+_tem_mes = mes_escolhido in resumo.index
+_v_suc = _num_br(int(resumo.loc[mes_escolhido, "Sucessos"])) if _tem_mes else "—"
+_v_fal = _num_br(int(resumo.loc[mes_escolhido, "Falhas"]))   if _tem_mes else "—"
+
+st.markdown(
+    "<div class='kpi-row'>"
+    + _kpi_tile("Fallout Rate", _num_br(fallout_pct, 2) + "%", _d_pct, _up_pct,
+                _serie_pct, destaque=fallout_pct >= 1, rodape="Meta: abaixo de 1,00%")
+    + _kpi_tile("Total de pedidos no mês", _num_br(total_mes), _d_tot, _up_tot,
+                [resumo.loc[m, "Total"] for m in _meses_ord], destaque=False)
+    + _kpi_tile("Vendas com sucesso", _v_suc, _d_suc, _up_suc,
+                [resumo.loc[m, "Sucessos"] for m in _meses_ord], destaque=False)
+    + _kpi_tile("Falha (análise técnica)", _v_fal, _d_fal, _up_fal,
+                [resumo.loc[m, "Falhas"] for m in _meses_ord], destaque=False)
+    + "</div>",
+    unsafe_allow_html=True,
+)
+
+# ── Preenche a faixa 1 (fallout por jornada + ações) ──────────────────────────
+_data_dir = _base_dir()   # local: pasta do app | Drive: pasta temporária
+
+
+def _tile_jornada(nome_jornada):
+    """Tile de fallout rate de uma jornada, no mesmo estilo dos demais."""
+    _, resumo_j = carregar_dados(nome_jornada)
+    if mes_escolhido not in resumo_j.index:
+        return _kpi_tile(f"Fallout {nome_jornada}", "—", "", False, [],
+                         destaque=False, rodape="sem dados no mês")
+    meses_j = sorted(resumo_j.index.tolist())
+    pct_j   = resumo_j.loc[mes_escolhido, "Pct"]
+    ant_j   = [m for m in meses_j if m < mes_escolhido]
+    if ant_j:
+        dif = pct_j - resumo_j.loc[ant_j[-1], "Pct"]
+        delta_txt, delta_up = _num_br(abs(dif), 2) + "pp", dif > 0
+    else:
+        delta_txt, delta_up = "", False
+    return _kpi_tile(
+        f"Fallout {nome_jornada}", _num_br(pct_j, 2) + "%", delta_txt, delta_up,
+        [resumo_j.loc[m, "Pct"] for m in meses_j],
+        destaque=pct_j >= 1, rodape="Meta: abaixo de 1,00%",
+    )
+
+
+with faixa_topo:
+    st.markdown(
+        f"<div style='font:600 10px {FONTE};letter-spacing:.1em;text-transform:uppercase;"
+        f"color:{COR_MUTED};margin:0 0 10px'>Fallout por jornada · "
+        f"{mes_labels[mes_escolhido]}</div>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        "<div class='kpi-row'>"
+        + "".join(_tile_jornada(j) for j in jornadas_kpi())
+        + "</div>",
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+    col_a1, col_a2, _a_vazio = st.columns([1.5, 2.1, 5])
+    with col_a1:
+        if st.button("Atualizar dados", use_container_width=True):
+            st.cache_data.clear()
+            st.success("Cache limpo. Recarregando dados mais recentes...")
+            st.rerun()
+    with col_a2:
+        if st.button("Baixar PowerPoint ↓", use_container_width=True):
+            from gerar_slide3col import gerar_pptx_completo
+            with st.spinner("Gerando PowerPoint completo (isso lê todos os dados, pode levar um tempo)..."):
+                pptx_bytes = gerar_pptx_completo(_data_dir).getvalue()
+            _PPTX_MIME = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            disparar_download(pptx_bytes, "relatorio_completo.pptx", _PPTX_MIME)
+            st.success("PowerPoint completo gerado — o download deve começar automaticamente.")
+
+    st.caption("PowerPoint: 3 colunas + Top Ofensores + um slide por jornada. "
+               "Os dados são cacheados por até 30 min — use **Atualizar dados** "
+               "após alterar os arquivos no Drive.")
+
+    st.markdown("<hr>", unsafe_allow_html=True)   # separa faixa 1 da faixa 2
+
+aba_distribuicao, aba_erros, aba_defeitos = st.tabs(
+    ["Distribuição Fallout", "Análise de Erros", "Erros por Defeito"])
 
 with aba_distribuicao:
-    st.subheader(f"Distribuição Fallout — {mes_labels[mes_escolhido]}")
+    st.markdown(
+        f"<div style='font:600 10px {FONTE};letter-spacing:.1em;text-transform:uppercase;"
+        f"color:{COR_MUTED};margin:6px 0 14px'>"
+        f"Distribuição Fallout · {mes_labels[mes_escolhido]}</div>",
+        unsafe_allow_html=True,
+    )
 
     # ── Cards clicáveis ───────────────────────────────────────────────────────
     cols = st.columns(3)
@@ -131,18 +388,28 @@ with aba_distribuicao:
         qtd = len(cats[nome])
         pct = qtd / total_mes * 100 if total_mes > 0 else 0
         ativo = st.session_state.categoria_ativa == nome
-        border = "3px solid #C0392B" if ativo else "1px solid #ddd"
-        bg     = "#fff5f5" if ativo else "#fafafa"
+        borda   = f"2px solid {COR_ACC_700}" if ativo else f"1px solid {COR_DIVIDER}"
+        bg      = COR_ACC_100 if ativo else "#fff"
+        c_pct   = COR_ACC_800 if ativo else COR_TEXT
+        c_dot   = COR_ACC_700 if ativo else COR_DIVIDER
+        qtd_fmt = _num_br(qtd)
+        pct_fmt = _num_br(pct, 2)
         with cols[i % 3]:
             st.markdown(f"""
-            <div style='border:{border};background:{bg};border-radius:8px;
-                        padding:14px 16px;margin-bottom:10px;cursor:pointer'>
-              <div style='font-size:13px;color:#555;margin-bottom:4px'>{nome}</div>
-              <div style='font-size:26px;font-weight:700;color:#C0392B'>{pct:.2f}%</div>
-              <div style='font-size:12px;color:#888'>{qtd:,} pedidos</div>
+            <div style='border:{borda};background:{bg};padding:18px 20px;margin-bottom:8px'>
+              <div style='display:flex;justify-content:space-between;align-items:flex-start;gap:10px'>
+                <div style='font:600 14px {FONTE};line-height:1.3'>{nome}</div>
+                <div style='width:7px;height:7px;border-radius:50%;flex:none;margin-top:5px;
+                            background:{c_dot}'></div>
+              </div>
+              <div style='display:flex;align-items:baseline;gap:8px;margin-top:12px'>
+                <div style='font:800 26px {FONTE};color:{c_pct}'>{pct_fmt}%</div>
+                <div style='font:600 12px {FONTE};color:{COR_MUTED}'>do total</div>
+              </div>
+              <div style='font:600 12px {FONTE};color:{COR_MUTED};margin-top:2px'>{qtd_fmt} pedidos</div>
             </div>
             """, unsafe_allow_html=True)
-            if st.button(f"Ver pedidos", key=f"btn_{i}"):
+            if st.button(f"Ver pedidos", key=f"btn_{i}", use_container_width=True):
                 if st.session_state.categoria_ativa == nome:
                     st.session_state.categoria_ativa = None
                 else:
@@ -195,7 +462,11 @@ with aba_distribuicao:
         )
 
 with aba_erros:
-    st.subheader(f"Análise de Erros — {jornada_escolhida}")
+    st.markdown(
+        f"<div style='font:600 10px {FONTE};letter-spacing:.1em;text-transform:uppercase;"
+        f"color:{COR_MUTED};margin:6px 0 14px'>Análise de Erros · {jornada_escolhida}</div>",
+        unsafe_allow_html=True,
+    )
 
     # Usa todo o histórico (não só o mês selecionado); o período é escolhido abaixo
     df_err = df.copy()
@@ -381,7 +652,12 @@ with aba_erros:
     )
 
 with aba_defeitos:
-    st.subheader(f"Erros por Defeito — {jornada_escolhida} | {mes_labels[mes_escolhido]}")
+    st.markdown(
+        f"<div style='font:600 10px {FONTE};letter-spacing:.1em;text-transform:uppercase;"
+        f"color:{COR_MUTED};margin:6px 0 14px'>Erros por Defeito · {jornada_escolhida} · "
+        f"{mes_labels[mes_escolhido]}</div>",
+        unsafe_allow_html=True,
+    )
 
     df_def = df_mes.copy()
     df_def["ErrorHandled__c"] = df_def["ErrorHandled__c"].fillna("(sem mensagem de erro)")
@@ -432,81 +708,60 @@ with aba_defeitos:
         ascending=False
     )
 
-    # ── Renderização em cards ─────────────────────────────────────────────────
-    erros_unicos = grp_def["ErrorHandled__c"].unique()
-    st.write(f"**{len(erros_unicos):,} tipos de erro**")
+    # ── Renderização: um expander por grupo de erro ───────────────────────────
+    from html import escape as _esc
 
-    cards_html = []
+    erros_unicos = grp_def["ErrorHandled__c"].unique()
+    st.markdown(
+        f"<div style='font:600 13px {FONTE};margin-bottom:10px'>"
+        f"{_num_br(len(erros_unicos))} tipos de erro</div>",
+        unsafe_allow_html=True,
+    )
+
     for erro in erros_unicos:
         dfts       = grp_def[grp_def["ErrorHandled__c"] == erro].sort_values("Qtd", ascending=False)
         total_erro = int(dfts["Qtd"].sum())
         pct_erro   = total_erro / total_mes * 100 if total_mes > 0 else 0
         n_dfts     = len(dfts)
 
-        linhas_dft = []
-        for _, r in dfts.iterrows():
-            orig  = str(r["DefectNumber_orig"] or "").strip()
-            qtd   = int(r["Qtd"])
-            nome  = str(r["DFT_Name"]  or "").strip()
-            phase = str(r["DFT_Phase"] or "").strip()
-            team  = str(r["DFT_Team"]  or "").strip()
-            ms    = pd.to_datetime(r["DFT_BugfixMilestone"], errors="coerce")
-            ms_s  = ms.strftime("%d/%m/%Y") if not pd.isna(ms) else ""
+        titulo = (erro[:110] + "…") if len(erro) > 110 else erro
+        sufixo = f" · {n_dfts} DFTs" if n_dfts > 1 else ""
+        with st.expander(f"{titulo}  —  {total_erro} ocorrências ({_num_br(pct_erro, 2)}%){sufixo}"):
+            st.markdown(
+                f"<div class='raw-msg'>{_esc(str(erro))}</div>", unsafe_allow_html=True)
 
-            if orig in ("", "nan", "-1"):
-                dft_label = "(sem DFT)"
-                info      = "sem defeito associado"
-                info_color = "#aaa"
-            elif orig == "999999":
-                dft_label  = "Pontual"
-                info       = ""
-                info_color = "#666"
-            else:
-                dft_label  = "DFT " + orig
-                partes = [p for p in [nome, phase, ("entrega " + ms_s) if ms_s else "", team] if p]
-                info       = " · ".join(partes)
-                info_color = "#555"
+            chips, linhas_dft = [], []
+            for _, r in dfts.iterrows():
+                orig  = str(r["DefectNumber_orig"] or "").strip()
+                qtd   = int(r["Qtd"])
+                nome  = str(r["DFT_Name"]  or "").strip()
+                phase = str(r["DFT_Phase"] or "").strip()
+                team  = str(r["DFT_Team"]  or "").strip()
+                ms    = pd.to_datetime(r["DFT_BugfixMilestone"], errors="coerce")
+                ms_s  = ms.strftime("%d/%m/%Y") if not pd.isna(ms) else ""
 
-            bc = "#C0392B" if qtd >= 10 else "#e67e22" if qtd >= 3 else "#7f8c8d"
-            linhas_dft.append(
-                "<div style='display:flex;align-items:center;gap:10px;"
-                "padding:5px 0;border-bottom:1px solid #f0f0f0'>"
-                "<span style='background:" + bc + ";color:#fff;border-radius:4px;"
-                "padding:1px 8px;font-size:12px;font-weight:700;min-width:28px;text-align:center'>"
-                + str(qtd) +
-                "</span>"
-                "<span style='font-weight:600;color:#1a1a1a;font-size:13px;min-width:110px'>"
-                + dft_label +
-                "</span>"
-                "<span style='color:" + info_color + ";font-size:12px'>" + info + "</span>"
-                "</div>"
-            )
+                if orig in ("", "nan", "-1"):
+                    dft_label = "(sem DFT)"
+                    info      = "sem defeito associado"
+                elif orig == "999999":
+                    dft_label = "Pontual"
+                    info      = ""
+                else:
+                    # alguns registros já vêm com o prefixo ("DFT 232143")
+                    dft_label = orig if orig.upper().startswith("DFT") else "DFT " + orig
+                    partes = [p for p in [nome, phase, ("entrega " + ms_s) if ms_s else "", team] if p]
+                    info   = " · ".join(partes)
 
-        multi = (
-            "<span style='background:#1565C0;color:#fff;border-radius:10px;"
-            "padding:1px 8px;font-size:11px;margin-left:8px'>" + str(n_dfts) + " DFTs</span>"
-        ) if n_dfts > 1 else ""
+                chips.append(f"<span class='chip'>{_esc(dft_label)}</span>")
+                cor_qtd = COR_ACC_700 if qtd >= 10 else (COR_ACC_500 if qtd >= 3 else COR_MUTED)
+                linhas_dft.append(
+                    f"<div style='display:flex;align-items:baseline;gap:12px;padding:7px 0;"
+                    f"border-bottom:1px solid {COR_DIVIDER}'>"
+                    f"<span style='font:800 13px {FONTE};color:{cor_qtd};min-width:34px'>{qtd}</span>"
+                    f"<span style='font:600 13px {FONTE};min-width:120px'>{_esc(dft_label)}</span>"
+                    f"<span style='font-size:12px;color:{COR_MUTED_2}'>{_esc(info)}</span>"
+                    f"</div>"
+                )
 
-        cards_html.append(
-            "<div style='border:1px solid #ddd;border-radius:8px;"
-            "margin-bottom:14px;overflow:hidden;font-family:sans-serif'>"
-            "<div style='background:#2c2c2c;padding:10px 14px;"
-            "display:flex;justify-content:space-between;align-items:center'>"
-            "<span style='color:#fff;font-size:12px;flex:1;margin-right:16px'>" + erro + "</span>"
-            "<span style='white-space:nowrap'>"
-            "<span style='background:#C0392B;color:#fff;border-radius:4px;"
-            "padding:2px 10px;font-size:13px;font-weight:700'>" + str(total_erro) + "</span>"
-            "<span style='color:#ccc;font-size:11px;margin-left:6px'>" + f"{pct_erro:.2f}%" + "</span>"
-            + multi +
-            "</span></div>"
-            "<div style='padding:8px 14px 4px;background:#fff'>"
-            + "".join(linhas_dft) +
-            "</div></div>"
-        )
-
-    altura_total = max(400, len(erros_unicos) * 80)
-    st.components.v1.html(
-        "<div style='font-family:sans-serif;padding:4px'>" + "".join(cards_html) + "</div>",
-        height=min(altura_total, 800),
-        scrolling=True,
-    )
+            st.markdown("<div>" + "".join(chips) + "</div>", unsafe_allow_html=True)
+            st.markdown("".join(linhas_dft), unsafe_allow_html=True)
