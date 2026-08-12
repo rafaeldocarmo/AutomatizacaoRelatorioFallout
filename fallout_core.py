@@ -30,6 +30,32 @@ ARQ_US = "RelatorioUSOctane.xlsx"
 COLUNAS_OCTANE_BASE = ["ID", "Name", "Phase", "Bugfix Milestone", "Team", "Type"]
 COL_US_MELHORIA = "US de Melhoria"
 
+# ── Jornadas em formato "RPA" ────────────────────────────────────────────────
+# Algumas jornadas (PME) não vêm da extração Salesforce/Vlocity e sim de um
+# relatório de RPA: um CSV único, separado por ';' e em cp1252, com sucessos e
+# falhas na mesma planilha. O de-para abaixo traduz para o formato interno.
+RPA_SEP = ";"
+RPA_ENCODING = "cp1252"
+RPA_COL_RESULTADO = "SUCESSO OU FALHA"   # coluna U
+RPA_VALOR_FALHA = "Erro"
+RPA_COL_DATA = "DATA_CRIACAO"
+RPA_COL_ENTREGA = "DATA CORREÇÃO"        # coluna S
+RPA_COL_DEFEITO = "DEFEITO"              # coluna M
+RENAME_RPA = {
+    "PEDIDO_SF": "OrderNumber",
+    "DESCRICAO_ERRO": "ErrorHandled__c",
+    "SEGMENTO": "Channel",
+    "TERRITORIO": "Segment",
+    "DESCRICAO": "OrderStatus",
+    "CLASSIFICAÇÃO": "SubStatus",
+}
+# Rótulos que não são defeito: têm categoria própria na regra de negócio.
+RPA_ROTULOS_NAO_DEFEITO = {
+    "enviado e-mail",                  # → Em Avaliação por MOPs
+    "enviado e-mail - outros times",   # → Em avaliação - Outros times
+    "erro de processo",                # → Falha no Processo Usuário
+}
+
 RENAME_FALHAS = {
     "vlocity_cmt__OrchestrationPlanId__r.vlocity_cmt__OrderId__r.OrderNumber": "OrderNumber",
     "vlocity_cmt__OrchestrationPlanId__r.vlocity_cmt__OrderId__r.Channel__c": "Channel",
@@ -57,9 +83,23 @@ def _subpastas(caminho):
     return sorted(d for d in os.listdir(caminho) if os.path.isdir(os.path.join(caminho, d)))
 
 
+def formato_jornada(pasta):
+    """
+    Descobre como a jornada guarda os dados:
+      "extracao" → subpastas falhas/ e sucessos/ (export Salesforce/Vlocity)
+      "rpa"      → um CSV solto na pasta, com sucessos e falhas juntos
+      None       → não parece uma jornada
+    """
+    if os.path.isdir(os.path.join(pasta, "falhas")):
+        return "extracao"
+    if os.path.isdir(pasta) and glob.glob(os.path.join(pasta, "*.csv")):
+        return "rpa"
+    return None
+
+
 def _tem_jornadas(caminho):
-    """True se a pasta contém diretórios de jornada (com subpasta 'falhas')."""
-    return any(os.path.isdir(os.path.join(caminho, d, "falhas")) for d in _subpastas(caminho))
+    """True se a pasta contém diretórios de jornada, em qualquer um dos formatos."""
+    return any(formato_jornada(os.path.join(caminho, d)) for d in _subpastas(caminho))
 
 
 def raiz_dados(base_dir):
@@ -80,23 +120,100 @@ def raiz_dados(base_dir):
 
 
 def jornadas_disponiveis(base_dir):
-    """Pastas de jornada disponíveis (as que têm subpasta 'falhas')."""
+    """Pastas de jornada disponíveis, em qualquer um dos formatos suportados."""
     raiz = raiz_dados(base_dir)
     if not os.path.isdir(raiz):
         return []
     return sorted(
         d for d in os.listdir(raiz)
-        if os.path.isdir(os.path.join(raiz, d, "falhas"))
+        if formato_jornada(os.path.join(raiz, d))
     )
+
+
+def jornadas_consolidaveis(base_dir):
+    """
+    Jornadas que entram na soma do "Consolidado" — só as de extração.
+
+    As de formato RPA ficam de fora de propósito: o denominador delas é
+    "pedidos processados pelo robô", não vendas, então somar com as outras
+    produziria um fallout que não quer dizer nada. Elas continuam disponíveis
+    individualmente, com aba, KPI e slide próprios.
+    """
+    raiz = raiz_dados(base_dir)
+    return [
+        j for j in jornadas_disponiveis(base_dir)
+        if formato_jornada(os.path.join(raiz, j)) != "rpa"
+    ]
 
 
 def resolver_jornadas(jornada, base_dir):
     """Traduz o nome escolhido nas pastas que devem ser lidas."""
     if jornada == "Consolidado":
-        return jornadas_disponiveis(base_dir)
+        return jornadas_consolidaveis(base_dir)
     if jornada == "Base + Cross Sell":
         return ["Base Móvel", "Cross Sell"]
     return [jornada]
+
+
+def _limpar_defeito(serie):
+    """Texto do campo de defeito sem espaços não-quebráveis nem sobras."""
+    return serie.fillna("").astype(str).str.replace("\xa0", " ", regex=False).str.strip()
+
+
+def _ler_jornada_rpa(pasta):
+    """
+    Lê uma jornada em formato RPA e devolve (df_falhas, sucessos_por_mes).
+
+    O CSV traz sucessos e falhas juntos: a coluna "SUCESSO OU FALHA" separa os
+    dois. As falhas viram linhas no formato interno; os sucessos são apenas
+    contados por mês, que é o que o cálculo do fallout precisa.
+    """
+    partes = [
+        pd.read_csv(f, sep=RPA_SEP, encoding=RPA_ENCODING, dtype=str, low_memory=False)
+        for f in sorted(glob.glob(os.path.join(pasta, "*.csv")))
+    ]
+    bruto = pd.concat(partes, ignore_index=True)
+    bruto = bruto.loc[:, ~bruto.columns.str.startswith("Unnamed:")]
+
+    data = pd.to_datetime(bruto[RPA_COL_DATA], format="%d/%m/%Y", errors="coerce")
+    bruto = bruto[data.notna()].copy()
+    bruto["CreatedDate"] = (
+        data[data.notna()].dt.tz_localize("America/Sao_Paulo", ambiguous=True,
+                                          nonexistent="shift_forward").dt.tz_convert("UTC")
+    )
+
+    resultado = bruto[RPA_COL_RESULTADO].fillna("").str.strip().str.lower()
+    e_falha = resultado == RPA_VALOR_FALHA.lower()
+
+    sucessos = (
+        bruto[~e_falha]
+        .assign(Mes=lambda d: d["CreatedDate"].dt.tz_convert("America/Sao_Paulo").dt.month)
+        .groupby("Mes").size().rename("Sucessos")
+    )
+
+    df = bruto[e_falha].rename(columns=RENAME_RPA).copy()
+    df["DefectNumber_orig"] = _limpar_defeito(df[RPA_COL_DEFEITO])
+    # Aqui "0" é a marca de "sem defeito"; internamente isso é -1.
+    numero = pd.to_numeric(df["DefectNumber_orig"], errors="coerce")
+    df["DefectNumber__c"] = numero.where(numero > 0, -1).fillna(-1).astype(int)
+
+    # Rótulos como "Paliativo RPA - 6" ou "NFCOM" são defeitos de verdade, só que
+    # controlados fora do Octane — contam como defeito mesmo sem número.
+    rotulo = df["DefectNumber_orig"].str.lower()
+    df["TemDefeito"] = (
+        (df["DefectNumber__c"] > 0) & (df["DefectNumber__c"] != 999999)
+    ) | (
+        (df["DefectNumber__c"] == -1)
+        & (df["DefectNumber_orig"] != "")
+        & (df["DefectNumber_orig"] != "0")
+        & ~rotulo.isin(RPA_ROTULOS_NAO_DEFEITO)
+    )
+
+    # Data de entrega do próprio relatório: só entra onde o Octane não tiver.
+    df["MilestoneRPA"] = pd.to_datetime(
+        df[RPA_COL_ENTREGA].fillna("").str.strip(), format="%d/%m/%y", errors="coerce"
+    )
+    return df, sucessos
 
 
 def _caminho_octane(raiz, base_dir, nome):
@@ -139,36 +256,53 @@ def carregar_base(base_dir, jornada):
         )
 
     # ── Falhas ───────────────────────────────────────────────────────────
-    arquivos_falhas = []
+    # Cada jornada é lida conforme o seu formato; o resultado é sempre o mesmo
+    # conjunto de colunas internas, então daqui para baixo tanto faz a origem.
+    partes_falhas, sucessos_rpa = [], []
+    arquivos_extracao = []
     for j in jornadas_combo:
-        arqs = sorted(glob.glob(os.path.join(raiz, j, "falhas", "*.csv")))
-        if not arqs:
-            raise FileNotFoundError(f"Nenhum CSV encontrado em {os.path.join(raiz, j, 'falhas')}")
-        arquivos_falhas += arqs
+        pasta = os.path.join(raiz, j)
+        formato = formato_jornada(pasta)
+        if formato == "rpa":
+            df_rpa, suc_rpa = _ler_jornada_rpa(pasta)
+            partes_falhas.append(df_rpa)
+            sucessos_rpa.append(suc_rpa)
+        elif formato == "extracao":
+            arqs = sorted(glob.glob(os.path.join(pasta, "falhas", "*.csv")))
+            if not arqs:
+                raise FileNotFoundError(f"Nenhum CSV encontrado em {os.path.join(pasta, 'falhas')}")
+            arquivos_extracao += arqs
+        else:
+            raise FileNotFoundError(f"{pasta} não parece uma jornada (sem falhas/ e sem CSV)")
 
-    df_falhas = pd.concat([pd.read_csv(f) for f in arquivos_falhas], ignore_index=True)
-    df_falhas["CreatedDate"] = pd.to_datetime(df_falhas["CreatedDate"], utc=True, errors="coerce")
-    df_falhas = df_falhas.rename(columns=RENAME_FALHAS)
+    if arquivos_extracao:
+        df_ext = pd.concat([pd.read_csv(f) for f in arquivos_extracao], ignore_index=True)
+        df_ext["CreatedDate"] = pd.to_datetime(df_ext["CreatedDate"], utc=True, errors="coerce")
+        df_ext = df_ext.rename(columns=RENAME_FALHAS)
 
-    # O export do CRM às vezes traz o número do defeito com espaços não-quebráveis
-    # no fim (ex.: "233538\xa0\xa0"). Sem limpar, pd.to_numeric devolve NaN e o
-    # pedido acaba contado como "Falta Associar ao Defeito/US" mesmo tendo DFT.
-    df_falhas["DefectNumber_orig"] = (
-        df_falhas["DefectNumber__c"].astype(str)
-        .str.replace("\xa0", " ", regex=False)
-        .str.strip()
-    )
-    # Alguns registros vêm com o prefixo do próprio sistema ("DFT 232143"). Só o
-    # prefixo DFT é removido: INC-, DDP-, PDST- e OS referenciam outros sistemas,
-    # não existem no Octane e devem continuar sem defeito associado.
-    df_falhas["DefectNumber__c"] = (
-        pd.to_numeric(
-            df_falhas["DefectNumber_orig"].str.replace(
-                r"^DFT\s*(?=\d)", "", regex=True, case=False),
-            errors="coerce",
+        # O export do CRM às vezes traz o número do defeito com espaços não-quebráveis
+        # no fim (ex.: "233538\xa0\xa0"). Sem limpar, pd.to_numeric devolve NaN e o
+        # pedido acaba contado como "Falta Associar ao Defeito/US" mesmo tendo DFT.
+        df_ext["DefectNumber_orig"] = _limpar_defeito(df_ext["DefectNumber__c"])
+        # Alguns registros vêm com o prefixo do próprio sistema ("DFT 232143"). Só o
+        # prefixo DFT é removido: INC-, DDP-, PDST- e OS referenciam outros sistemas,
+        # não existem no Octane e devem continuar sem defeito associado.
+        df_ext["DefectNumber__c"] = (
+            pd.to_numeric(
+                df_ext["DefectNumber_orig"].str.replace(
+                    r"^DFT\s*(?=\d)", "", regex=True, case=False),
+                errors="coerce",
+            )
+            .fillna(-1).astype(int)
         )
-        .fillna(-1).astype(int)
-    )
+        # 999999 é "Falha Pontual", que tem categoria própria e não conta como
+        # defeito em tratamento.
+        df_ext["TemDefeito"] = (
+            (df_ext["DefectNumber__c"] > 0) & (df_ext["DefectNumber__c"] != 999999)
+        )
+        partes_falhas.append(df_ext)
+
+    df_falhas = pd.concat(partes_falhas, ignore_index=True)
 
     # ── Octane: DFTs + US, com resolução de "US de Melhoria" ───────────────
     df_dft = pd.read_excel(_caminho_octane(raiz, base_dir, ARQ_DFT))
@@ -211,6 +345,16 @@ def carregar_base(base_dir, jornada):
     # ── Join falhas ← Octane ────────────────────────────────────────────
     df = df_falhas.merge(df_octane, on="DefectNumber__c", how="left")
 
+    # Jornadas RPA trazem a data de entrega no próprio relatório. O Octane é a
+    # fonte oficial, então ela só preenche onde o Octane não se posicionou —
+    # inclusive nos rótulos que nem existem lá ("Paliativo RPA - 6", "NFCOM").
+    if "MilestoneRPA" in df.columns:
+        df["DFT_BugfixMilestone"] = df["DFT_BugfixMilestone"].fillna(df["MilestoneRPA"])
+        df = df.drop(columns="MilestoneRPA")
+    if "TemDefeito" not in df.columns:
+        df["TemDefeito"] = (df["DefectNumber__c"] > 0) & (df["DefectNumber__c"] != 999999)
+    df["TemDefeito"] = df["TemDefeito"].fillna(False).astype(bool)
+
     # Desduplicar por OrderNumber mantendo a linha mais informativa:
     #   1º) DFT real (número > 0);
     #   2º) no empate entre linhas sem DFT (todas viram -1), vence a que tem
@@ -230,22 +374,29 @@ def carregar_base(base_dir, jornada):
     df["Mes"] = df["CreatedDate"].dt.tz_convert("America/Sao_Paulo").dt.month
 
     # ── Sucessos por mês (mesmo denominador do fallout rate) ────────────
-    arquivos_suc = []
+    # Nas jornadas RPA os sucessos já vieram contados junto com as falhas; nas
+    # de extração eles estão em CSVs próprios, com o mês no nome do arquivo.
+    partes_suc = []
     for j in jornadas_combo:
+        if formato_jornada(os.path.join(raiz, j)) == "rpa":
+            continue
         arqs_suc = sorted(glob.glob(os.path.join(raiz, j, "sucessos", "*.csv")))
         if not arqs_suc:
             raise FileNotFoundError(f"Nenhum CSV encontrado em {os.path.join(raiz, j, 'sucessos')}")
-        arquivos_suc += arqs_suc
+        for f in arqs_suc:
+            mes = mes_do_arquivo(f)
+            if mes is None:
+                continue
+            df_tmp = pd.read_csv(f).rename(columns={"expr0": "Sucessos"})
+            df_tmp["Mes"] = mes
+            partes_suc.append(df_tmp[["Mes", "Sucessos"]])
 
-    partes_suc = []
-    for f in arquivos_suc:
-        mes = mes_do_arquivo(f)
-        if mes is None:
-            continue
-        df_tmp = pd.read_csv(f).rename(columns={"expr0": "Sucessos"})
-        df_tmp["Mes"] = mes
-        partes_suc.append(df_tmp[["Mes", "Sucessos"]])
-    sucessos_mes = pd.concat(partes_suc, ignore_index=True).groupby("Mes")["Sucessos"].sum()
+    series_suc = [p.groupby("Mes")["Sucessos"].sum() for p in partes_suc] + sucessos_rpa
+    if not series_suc:
+        raise FileNotFoundError("Nenhum dado de sucesso encontrado para a jornada")
+    sucessos_mes = (
+        pd.concat(series_suc).groupby(level=0).sum().rename("Sucessos")
+    )
 
     falhas_mes = df.groupby("Mes").size().rename("Falhas")
     resumo = pd.DataFrame({"Falhas": falhas_mes, "Sucessos": sucessos_mes}).fillna(0)
@@ -272,30 +423,41 @@ def categorizar(df, mes, hoje=None):
     _corrigido = df_mes["DFT_Phase"].fillna("").str.strip().isin(FASES_CORRIGIDO)
     _tem_ms = df_mes["DFT_BugfixMilestone"].notna()
     _encerrado = _corrigido & _tem_ms & (milestone_dt <= hoje)
-    _outros_mask = df_mes["DefectNumber_orig"].str.strip().str.lower() == "enviado e-mail - outros times"
-    _erro_proc_mask = df_mes["DefectNumber_orig"].str.strip().str.lower() == "erro de processo"
+    _rotulo = df_mes["DefectNumber_orig"].str.strip().str.lower()
+    _outros_mask = _rotulo == "enviado e-mail - outros times"
+    _erro_proc_mask = _rotulo == "erro de processo"
+    # No relatório de PME, "Enviado e-mail" (sem sufixo) significa que o caso
+    # está em avaliação por MOPs — é rótulo diferente de "…- Outros Times".
+    _email_mops_mask = _rotulo == "enviado e-mail"
+
+    # Jornadas RPA controlam parte dos defeitos fora do Octane ("Paliativo RPA - 6",
+    # "NFCOM"), então a marca de "tem defeito" vem da leitura e não do número.
+    if "TemDefeito" in df_mes.columns:
+        _tem_defeito = df_mes["TemDefeito"].fillna(False).astype(bool)
+    else:
+        _tem_defeito = (df_mes["DefectNumber__c"] > 0) & (df_mes["DefectNumber__c"] != 999999)
 
     cats = {
         "Em Tratamento/Avaliação pela Squad": df_mes[
-            df_mes["DefectNumber__c"].notna() &
-            (df_mes["DefectNumber__c"] != 999999) &
-            (df_mes["DefectNumber__c"] != -1) &
+            _tem_defeito &
             ~df_mes["DFT_Phase"].fillna("").str.strip().isin(FASES_MOPS) &
+            ~_email_mops_mask &
             ~_encerrado
         ],
         "Resolvido": df_mes[_corrigido & _tem_ms & (milestone_dt < quinze_dias)],
         "Falha Pontual": df_mes[df_mes["DefectNumber__c"] == 999999],
         "Falta Associar ao Defeito/US": df_mes[
-            (df_mes["DefectNumber__c"].isna() | (df_mes["DefectNumber__c"] == -1)) &
-            ~_outros_mask & ~_erro_proc_mask
+            ~_tem_defeito &
+            (df_mes["DefectNumber__c"] != 999999) &
+            ~_outros_mask & ~_erro_proc_mask & ~_email_mops_mask
         ],
         "Tratado - Em avaliação de eficácia": df_mes[
             _corrigido & _tem_ms & (milestone_dt >= quinze_dias) & (milestone_dt <= hoje)
         ],
         "Em Avaliação por MOPs": df_mes[
-            (df_mes["DefectNumber__c"] > 0) &
-            (df_mes["DefectNumber__c"] != 999999) &
-            df_mes["DFT_Phase"].fillna("").str.strip().isin(FASES_MOPS)
+            (_tem_defeito &
+             df_mes["DFT_Phase"].fillna("").str.strip().isin(FASES_MOPS)) |
+            _email_mops_mask
         ],
         "Em avaliação - Outros times": df_mes[_outros_mask],
         "Falha no Processo Usuário": df_mes[_erro_proc_mask],

@@ -266,10 +266,17 @@ def gerar_pptx_completo(base_dir=".", dados_3col=None):
     jornadas_brutas = fallout_core.jornadas_disponiveis(base_dir)
     ns_por_jornada = {j: pipeline.gerar_relatorio(base_dir, j) for j in jornadas_brutas}
 
+    # O Top Ofensores é a visão consolidada, então lista as mesmas jornadas que
+    # compõem o Consolidado. As de formato RPA (PME) entram apenas com o slide
+    # individual delas, mais abaixo.
+    consolidaveis = set(fallout_core.jornadas_consolidaveis(base_dir))
     ns_consolidado = (dados_3col.get("Consolidado") or {}).get("ns")
     if ns_consolidado is None:
         ns_consolidado = pipeline.gerar_relatorio(base_dir, "Consolidado")
-    gerar_pptx._montar_slide_top_ofensores(prs, ns_consolidado, ns_por_jornada)
+    gerar_pptx._montar_slide_top_ofensores(
+        prs, ns_consolidado,
+        {j: ns for j, ns in ns_por_jornada.items() if j in consolidaveis},
+    )
 
     for jornada, ns in ns_por_jornada.items():
         data, chart_png = gerar_pptx._montar_dados(jornada, ns)
