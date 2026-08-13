@@ -20,7 +20,14 @@ MESES_PT = {1: "Jan", 2: "Fev", 3: "Mar", 4: "Abr", 5: "Mai", 6: "Jun",
 MESES_LABEL = {m: f"{abrev}-26" for abrev, m in ABREV_MES.items()}
 
 FASES_CORRIGIDO = {"Corrigido", "Fechado"}
-FASES_MOPS = {"Cancelado", "Rejeitado"}
+# "Em Avaliação por MOPs" é a fase que o catálogo do NBA produz (Status do
+# Chamado = 1); as outras duas vêm do Octane.
+FASE_MOPS_NBA = "Em Avaliação por MOPs"
+FASES_MOPS = {"Cancelado", "Rejeitado", FASE_MOPS_NBA}
+
+# Pasta da jornada → nome mostrado no app e no título do slide. A pasta segue
+# com o nome da origem do arquivo; só a exibição muda.
+NOMES_EXIBICAO = {"NBA": "Base Residencial"}
 
 # Pasta local (dentro do projeto) com as jornadas e as planilhas do Octane.
 PASTA_DADOS = "extracoes"
@@ -56,6 +63,24 @@ RPA_ROTULOS_NAO_DEFEITO = {
     "erro de processo",                # → Falha no Processo Usuário
 }
 
+# ── Jornadas em formato "NBA" ────────────────────────────────────────────────
+# Planilha XLSX com duas abas: "Analitico" (um pedido por linha) e "Defeitos",
+# que é o catálogo local — aqui os defeitos são BRJ-*, não existem no Octane.
+NBA_ABA_ANALITICO = "Analitico"
+NBA_ABA_DEFEITOS = "Defeitos"
+NBA_COL_STATUS = "Status"
+NBA_VALOR_SUCESSO = "SUCESSO"
+NBA_COL_DATA = "Data"
+NBA_COL_DEFEITO = "Defeito"
+RENAME_NBA = {
+    "CD": "OrderNumber",
+    "Erro agrupado": "ErrorHandled__c",
+    "Canal": "Channel",
+    "Segmento Comercial": "Segment",
+    "Estado": "State",
+    "Classificação Original": "SubStatus",
+}
+
 RENAME_FALHAS = {
     "vlocity_cmt__OrchestrationPlanId__r.vlocity_cmt__OrderId__r.OrderNumber": "OrderNumber",
     "vlocity_cmt__OrchestrationPlanId__r.vlocity_cmt__OrderId__r.Channel__c": "Channel",
@@ -88,13 +113,23 @@ def formato_jornada(pasta):
     Descobre como a jornada guarda os dados:
       "extracao" → subpastas falhas/ e sucessos/ (export Salesforce/Vlocity)
       "rpa"      → um CSV solto na pasta, com sucessos e falhas juntos
+      "nba"      → XLSX com as abas "Analitico" e "Defeitos"
       None       → não parece uma jornada
     """
     if os.path.isdir(os.path.join(pasta, "falhas")):
         return "extracao"
-    if os.path.isdir(pasta) and glob.glob(os.path.join(pasta, "*.csv")):
+    if not os.path.isdir(pasta):
+        return None
+    if glob.glob(os.path.join(pasta, "*.xlsx")):
+        return "nba"
+    if glob.glob(os.path.join(pasta, "*.csv")):
         return "rpa"
     return None
+
+
+def nome_exibicao(jornada):
+    """Nome que o usuário vê; por padrão é o próprio nome da pasta."""
+    return NOMES_EXIBICAO.get(jornada, jornada)
 
 
 def _tem_jornadas(caminho):
@@ -134,15 +169,15 @@ def jornadas_consolidaveis(base_dir):
     """
     Jornadas que entram na soma do "Consolidado" — só as de extração.
 
-    As de formato RPA ficam de fora de propósito: o denominador delas é
-    "pedidos processados pelo robô", não vendas, então somar com as outras
-    produziria um fallout que não quer dizer nada. Elas continuam disponíveis
-    individualmente, com aba, KPI e slide próprios.
+    As de outros formatos (RPA, NBA) ficam de fora de propósito: cada uma conta
+    o denominador do seu jeito — "pedidos processados pelo robô", por exemplo —
+    então somar com as demais produziria um fallout que não quer dizer nada.
+    Elas continuam disponíveis individualmente, com aba, KPI e slide próprios.
     """
     raiz = raiz_dados(base_dir)
     return [
         j for j in jornadas_disponiveis(base_dir)
-        if formato_jornada(os.path.join(raiz, j)) != "rpa"
+        if formato_jornada(os.path.join(raiz, j)) == "extracao"
     ]
 
 
@@ -216,6 +251,84 @@ def _ler_jornada_rpa(pasta):
     return df, sucessos
 
 
+def _ler_catalogo_nba(caminho):
+    """
+    Aba "Defeitos": o catálogo local de defeitos BRJ-*, que faz aqui o papel do
+    Octane. Devolve um DataFrame já no formato das colunas DFT_*.
+    """
+    cat = pd.read_excel(caminho, sheet_name=NBA_ABA_DEFEITOS, dtype=str)
+    tipo = cat["Tipo de Chamado"].fillna("").str.strip().str.upper()
+    status = cat["Status do Chamado"].fillna("").str.strip()
+    return pd.DataFrame({
+        "DefectNumber_orig": cat[NBA_COL_DEFEITO].fillna("").str.strip(),
+        "DFT_Name": cat["Título do Defeito"],
+        # Só o catálogo diz em que pé está o chamado: 0 segue em tratamento,
+        # 1 está em avaliação por MOPs.
+        "DFT_Phase": status.map({"0": "Em Tratamento", "1": FASE_MOPS_NBA}),
+        "DFT_BugfixMilestone": pd.to_datetime(
+            cat["Data de Implantação"], format="%d/%m/%Y", errors="coerce"),
+        # Nomes vêm com caixa e espaços inconsistentes ("Gilberto", "gilberto",
+        # " Gilberto"), o que criaria times diferentes na tabela do slide.
+        "DFT_Team": cat["Responsável pelo Chamado"].fillna("").str.strip().str.title(),
+        "DFT_Type": tipo.map(lambda t: "User Story" if t.startswith("MELHORIA") else "Defect"),
+    }).drop_duplicates(subset="DefectNumber_orig")
+
+
+def _ler_jornada_nba(pasta):
+    """
+    Lê uma jornada em formato NBA e devolve (df_falhas, sucessos_por_mes).
+
+    A aba "Analitico" traz um pedido por linha, com sucessos e falhas juntos; a
+    aba "Defeitos" entra no lugar do Octane, já que os defeitos são BRJ-* e não
+    existem lá.
+    """
+    partes, catalogos = [], []
+    for arq in sorted(glob.glob(os.path.join(pasta, "*.xlsx"))):
+        analitico = pd.read_excel(arq, sheet_name=NBA_ABA_ANALITICO, dtype=str)
+        partes.append(analitico)
+        # Guarda até quando o arquivo vai, para saber qual catálogo é o mais novo.
+        ate = pd.to_datetime(analitico[NBA_COL_DATA], format="%d/%m/%Y", errors="coerce").max()
+        catalogos.append((ate, _ler_catalogo_nba(arq)))
+    bruto = pd.concat(partes, ignore_index=True)
+
+    # O mesmo defeito aparece em vários arquivos e muda de status ao longo do
+    # tempo (avaliação por MOPs primeiro, tratamento depois). Vale o do arquivo
+    # mais recente — ordenar por nome daria o resultado errado.
+    catalogos.sort(key=lambda par: par[0], reverse=True)
+    catalogo = (
+        pd.concat([c for _, c in catalogos], ignore_index=True)
+        .drop_duplicates(subset="DefectNumber_orig")
+    )
+
+    data = pd.to_datetime(bruto[NBA_COL_DATA], format="%d/%m/%Y", errors="coerce")
+    bruto = bruto[data.notna()].copy()
+    bruto["CreatedDate"] = (
+        data[data.notna()].dt.tz_localize("America/Sao_Paulo", ambiguous=True,
+                                          nonexistent="shift_forward").dt.tz_convert("UTC")
+    )
+
+    e_sucesso = bruto[NBA_COL_STATUS].fillna("").str.strip().str.upper() == NBA_VALOR_SUCESSO
+    sucessos = (
+        bruto[e_sucesso]
+        .assign(Mes=lambda d: d["CreatedDate"].dt.tz_convert("America/Sao_Paulo").dt.month)
+        .groupby("Mes").size().rename("Sucessos")
+    )
+
+    df = bruto[~e_sucesso].rename(columns=RENAME_NBA).copy()
+    # Alguns pedidos trazem mais de um defeito na mesma célula
+    # ("BRJ-385|BRJ-325"); o pedido é contado no primeiro.
+    df["DefectNumber_orig"] = (
+        df[NBA_COL_DEFEITO].fillna("").astype(str)
+        .str.split("|").str[0].str.strip()
+    )
+    numero = pd.to_numeric(df["DefectNumber_orig"], errors="coerce")
+    df["DefectNumber__c"] = numero.fillna(-1).astype(int)   # preserva o 999999
+    df["TemDefeito"] = (df["DefectNumber_orig"] != "") & (df["DefectNumber__c"] != 999999)
+
+    df = df.merge(catalogo, on="DefectNumber_orig", how="left")
+    return df, sucessos
+
+
 def _caminho_octane(raiz, base_dir, nome):
     """
     Localiza uma planilha do Octane: primeiro junto das jornadas (é onde a
@@ -258,12 +371,18 @@ def carregar_base(base_dir, jornada):
     # ── Falhas ───────────────────────────────────────────────────────────
     # Cada jornada é lida conforme o seu formato; o resultado é sempre o mesmo
     # conjunto de colunas internas, então daqui para baixo tanto faz a origem.
-    partes_falhas, sucessos_rpa = [], []
+    # `partes_prontas` são as jornadas que já trazem os dados do defeito (NBA
+    # tem catálogo próprio) e por isso não passam pelo join com o Octane.
+    partes_falhas, partes_prontas, sucessos_rpa = [], [], []
     arquivos_extracao = []
     for j in jornadas_combo:
         pasta = os.path.join(raiz, j)
         formato = formato_jornada(pasta)
-        if formato == "rpa":
+        if formato == "nba":
+            df_nba, suc_nba = _ler_jornada_nba(pasta)
+            partes_prontas.append(df_nba)
+            sucessos_rpa.append(suc_nba)
+        elif formato == "rpa":
             df_rpa, suc_rpa = _ler_jornada_rpa(pasta)
             partes_falhas.append(df_rpa)
             sucessos_rpa.append(suc_rpa)
@@ -302,7 +421,12 @@ def carregar_base(base_dir, jornada):
         )
         partes_falhas.append(df_ext)
 
-    df_falhas = pd.concat(partes_falhas, ignore_index=True)
+    if not partes_falhas and not partes_prontas:
+        raise FileNotFoundError(f"Nenhum dado de falha encontrado para {jornada}")
+    df_falhas = (
+        pd.concat(partes_falhas, ignore_index=True) if partes_falhas
+        else pd.DataFrame(columns=["DefectNumber__c"])
+    )
 
     # ── Octane: DFTs + US, com resolução de "US de Melhoria" ───────────────
     df_dft = pd.read_excel(_caminho_octane(raiz, base_dir, ARQ_DFT))
@@ -345,6 +469,11 @@ def carregar_base(base_dir, jornada):
     # ── Join falhas ← Octane ────────────────────────────────────────────
     df = df_falhas.merge(df_octane, on="DefectNumber__c", how="left")
 
+    # As jornadas de catálogo próprio (NBA) entram já resolvidas, depois do join.
+    if partes_prontas:
+        df = pd.concat([df] + partes_prontas, ignore_index=True) if len(df) else \
+             pd.concat(partes_prontas, ignore_index=True)
+
     # Jornadas RPA trazem a data de entrega no próprio relatório. O Octane é a
     # fonte oficial, então ela só preenche onde o Octane não se posicionou —
     # inclusive nos rótulos que nem existem lá ("Paliativo RPA - 6", "NFCOM").
@@ -378,8 +507,8 @@ def carregar_base(base_dir, jornada):
     # de extração eles estão em CSVs próprios, com o mês no nome do arquivo.
     partes_suc = []
     for j in jornadas_combo:
-        if formato_jornada(os.path.join(raiz, j)) == "rpa":
-            continue
+        if formato_jornada(os.path.join(raiz, j)) != "extracao":
+            continue   # RPA e NBA já contaram os sucessos junto com as falhas
         arqs_suc = sorted(glob.glob(os.path.join(raiz, j, "sucessos", "*.csv")))
         if not arqs_suc:
             raise FileNotFoundError(f"Nenhum CSV encontrado em {os.path.join(raiz, j, 'sucessos')}")

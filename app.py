@@ -239,8 +239,13 @@ faixa_topo = st.container()
 # ── Faixa 2: filtros globais ──────────────────────────────────────────────────
 _f_vazio, col_sel, col_jornada = st.columns([4, 1.6, 1.9])
 with col_jornada:
-    jornada_escolhida = st.selectbox("Jornada", options=jornadas,
-                                      index=jornadas.index("Base Móvel") if "Base Móvel" in jornadas else 0)
+    # O valor continua sendo o nome da pasta; só o rótulo muda (NBA aparece
+    # como "Base Residencial").
+    jornada_escolhida = st.selectbox(
+        "Jornada", options=jornadas,
+        format_func=fallout_core.nome_exibicao,
+        index=jornadas.index("Base Móvel") if "Base Móvel" in jornadas else 0)
+JORNADA_LABEL = fallout_core.nome_exibicao(jornada_escolhida)
 
 df, resumo = carregar_dados(jornada_escolhida)
 meses_disp = sorted(df["Mes"].unique().tolist())
@@ -310,7 +315,7 @@ def _tile_jornada(nome_jornada):
     """Tile de fallout rate de uma jornada, no mesmo estilo dos demais."""
     _, resumo_j = carregar_dados(nome_jornada)
     if mes_escolhido not in resumo_j.index:
-        return _kpi_tile(f"Fallout {nome_jornada}", "—", "", False, [],
+        return _kpi_tile(f"Fallout {fallout_core.nome_exibicao(nome_jornada)}", "—", "", False, [],
                          destaque=False, rodape="sem dados no mês")
     meses_j = sorted(resumo_j.index.tolist())
     pct_j   = resumo_j.loc[mes_escolhido, "Pct"]
@@ -321,7 +326,7 @@ def _tile_jornada(nome_jornada):
     else:
         delta_txt, delta_up = "", False
     return _kpi_tile(
-        f"Fallout {nome_jornada}", _num_br(pct_j, 2) + "%", delta_txt, delta_up,
+        f"Fallout {fallout_core.nome_exibicao(nome_jornada)}", _num_br(pct_j, 2) + "%", delta_txt, delta_up,
         [resumo_j.loc[m, "Pct"] for m in meses_j],
         destaque=pct_j >= 1, rodape="Meta: abaixo de 1,00%",
     )
@@ -461,7 +466,7 @@ with aba_distribuicao:
 with aba_erros:
     st.markdown(
         f"<div style='font:600 10px {FONTE};letter-spacing:.1em;text-transform:uppercase;"
-        f"color:{COR_MUTED};margin:6px 0 14px'>Análise de Erros · {jornada_escolhida}</div>",
+        f"color:{COR_MUTED};margin:6px 0 14px'>Análise de Erros · {JORNADA_LABEL}</div>",
         unsafe_allow_html=True,
     )
 
@@ -651,7 +656,7 @@ with aba_erros:
 with aba_defeitos:
     st.markdown(
         f"<div style='font:600 10px {FONTE};letter-spacing:.1em;text-transform:uppercase;"
-        f"color:{COR_MUTED};margin:6px 0 14px'>Erros por Defeito · {jornada_escolhida} · "
+        f"color:{COR_MUTED};margin:6px 0 14px'>Erros por Defeito · {JORNADA_LABEL} · "
         f"{mes_labels[mes_escolhido]}</div>",
         unsafe_allow_html=True,
     )

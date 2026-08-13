@@ -197,7 +197,12 @@ def gerar_relatorio(base_dir, jornada):
         dias_restantes = dias_no_mes - ms_date.day
         return max(dias_restantes, 0) / dias_no_mes
 
-    dft_counts["ProRate"] = dft_counts["MilestoneDate"].apply(lambda d: _prorate(d.to_pydatetime()))
+    # Sem nada em tratamento com entrega futura, o .apply() devolve uma série
+    # vazia com dtype de data e a multiplicação abaixo estoura.
+    dft_counts["ProRate"] = (
+        dft_counts["MilestoneDate"].apply(lambda d: _prorate(d.to_pydatetime()))
+        if len(dft_counts) else pd.Series(dtype="float64")
+    )
     dft_counts["Pct_mes"] = dft_counts["Pct_bruta"] * dft_counts["ProRate"]
     dft_counts["Pct_plena"] = dft_counts["Pct_bruta"]
 

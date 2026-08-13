@@ -11,6 +11,8 @@ from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
 from pptx.oxml.ns import qn, nsdecls
 from pptx.oxml import parse_xml
 
+import fallout_core
+
 RED = RGBColor(0xC0, 0x39, 0x2B); WHITE = RGBColor(0xFF, 0xFF, 0xFF)
 GRAY = RGBColor(0xF2, 0xF2, 0xF2); GRAY2 = RGBColor(0xF5, 0xF5, 0xF5)
 FG = RGBColor(0x22, 0x22, 0x22)
@@ -78,7 +80,7 @@ def _montar_dados(jornada, ns):
     chart_png = os.path.join(tempfile.mkdtemp(), "chart.png")
     fig.savefig(chart_png, dpi=200, bbox_inches=ext, pad_inches=0.08, facecolor="white")
 
-    data = {"title": f"{jornada} – Realização e Projeção de Fallout",
+    data = {"title": f"{fallout_core.nome_exibicao(jornada)} – Realização e Projeção de Fallout",
             "volume": volume, "dist": dist, "plan": plan, "detalhe": detalhe}
     return data, chart_png
 
