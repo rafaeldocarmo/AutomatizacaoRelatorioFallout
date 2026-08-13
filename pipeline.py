@@ -411,15 +411,16 @@ def gerar_relatorio(base_dir, jornada):
         df["DFT_BugfixMilestone"].notna() &
         (_ms_trat2 <= hoje)
     )
+    # `TemDefeito` no lugar do teste pelo número: jornadas com catálogo próprio
+    # identificam o defeito por rótulo (BRJ-218, "Paliativo RPA - 6") e ficariam
+    # de fora da tabela se o filtro exigisse um número.
     df_trat2 = df[
         df["Mes"].isin(meses_tab) &
-        df["DefectNumber__c"].notna() &
-        (df["DefectNumber__c"] != 999999) &
-        (df["DefectNumber__c"] != -1) &
+        df["TemDefeito"] &
         ~_fech2
     ].copy()
 
-    _idx_cols = ["DefectNumber__c", "DFT_Name", "DFT_Phase", "DFT_BugfixMilestone", "DFT_Type", "DFT_Team"]
+    _idx_cols = ["DefectKey", "DFT_Name", "DFT_Phase", "DFT_BugfixMilestone", "DFT_Type", "DFT_Team"]
     pivot2 = (
         df_trat2.groupby(_idx_cols + ["Mes"], dropna=False)
         .size()
@@ -432,12 +433,12 @@ def gerar_relatorio(base_dir, jornada):
         if m not in pivot2.columns:
             pivot2[m] = 0
 
-    _dft_em_trat = set(em_trat["DefectNumber__c"].unique())
-    _dft_pivot_antes = set(pivot2["DefectNumber__c"].unique()) if "DefectNumber__c" in pivot2.columns else set()
+    _dft_em_trat = set(em_trat["DefectKey"].unique())
+    _dft_pivot_antes = set(pivot2["DefectKey"].unique()) if "DefectKey" in pivot2.columns else set()
     _dft_sumidos = _dft_em_trat - _dft_pivot_antes
     if _dft_sumidos:
         print(f"  [DIAG] DFTs em em_trat mas fora do pivot (antes filtro mes_atual): {sorted(_dft_sumidos)}")
-    _dft_sem_mes_atual = set(pivot2[pivot2[mes_atual] == 0]["DefectNumber__c"].unique()) if mes_atual in pivot2.columns else set()
+    _dft_sem_mes_atual = set(pivot2[pivot2[mes_atual] == 0]["DefectKey"].unique()) if mes_atual in pivot2.columns else set()
     _dft_filtrados = _dft_em_trat & _dft_sem_mes_atual
     if _dft_filtrados:
         print(f"  [DIAG] DFTs removidos por nao ter ocorrencia em mes_atual ({mes_atual}): {sorted(_dft_filtrados)}")
@@ -458,10 +459,11 @@ def gerar_relatorio(base_dir, jornada):
         return ""
 
     def fmt_id(row):
-        raw = row["DefectNumber__c"]
+        # A chave é o número quando existe e o rótulo (BRJ-218) quando não.
+        raw = row.get("DefectKey", row.get("DefectNumber__c"))
         try:
-            base = str(int(raw))
-        except Exception:
+            base = str(int(float(raw)))
+        except (TypeError, ValueError):
             base = str(raw)
         return base + quarter_suffix(row["DFT_BugfixMilestone"])
 
@@ -527,7 +529,7 @@ def gerar_relatorio(base_dir, jornada):
 
         tipo = str(row["DFT_Type"]).strip() if pd.notna(row["DFT_Type"]) else ""
         tipo_fmt = "US" if tipo == "User Story" else "Defeito"
-        id_str = fmt_id({"DefectNumber__c": row["DefectNumber__c"], "DFT_BugfixMilestone": row["DFT_BugfixMilestone"]})
+        id_str = fmt_id({"DefectKey": row["DefectKey"], "DFT_BugfixMilestone": row["DFT_BugfixMilestone"]})
         ms_fmt = fmt_milestone(row["DFT_BugfixMilestone"])
         nome = str(row["DFT_Name"])[:70] if pd.notna(row["DFT_Name"]) else ""
         team = str(row["DFT_Team"])[:30] if pd.notna(row["DFT_Team"]) else ""
@@ -827,7 +829,7 @@ def gerar_relatorio(base_dir, jornada):
 
         tipo = str(row["DFT_Type"]).strip() if pd.notna(row["DFT_Type"]) else ""
         tipo_fmt = "US" if tipo == "User Story" else "Defeito"
-        id_str = fmt_id({"DefectNumber__c": row["DefectNumber__c"], "DFT_BugfixMilestone": row["DFT_BugfixMilestone"]})
+        id_str = fmt_id({"DefectKey": row["DefectKey"], "DFT_BugfixMilestone": row["DFT_BugfixMilestone"]})
         ms_fmt = fmt_milestone(row["DFT_BugfixMilestone"])
         nome = str(row["DFT_Name"])[:80] if pd.notna(row["DFT_Name"]) else ""
         team = str(row["DFT_Team"])[:35] if pd.notna(row["DFT_Team"]) else ""

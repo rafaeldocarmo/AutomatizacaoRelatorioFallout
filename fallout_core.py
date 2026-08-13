@@ -20,10 +20,10 @@ MESES_PT = {1: "Jan", 2: "Fev", 3: "Mar", 4: "Abr", 5: "Mai", 6: "Jun",
 MESES_LABEL = {m: f"{abrev}-26" for abrev, m in ABREV_MES.items()}
 
 FASES_CORRIGIDO = {"Corrigido", "Fechado"}
-# "Em Avaliação por MOPs" é a fase que o catálogo do NBA produz (Status do
-# Chamado = 1); as outras duas vêm do Octane.
-FASE_MOPS_NBA = "Em Avaliação por MOPs"
-FASES_MOPS = {"Cancelado", "Rejeitado", FASE_MOPS_NBA}
+FASES_MOPS = {"Cancelado", "Rejeitado"}
+# Fase única das jornadas com catálogo próprio (NBA): todo pedido com defeito
+# associado está em tratamento.
+FASE_TRATAMENTO_NBA = "Em Tratamento"
 
 # Pasta da jornada → nome mostrado no app e no título do slide. A pasta segue
 # com o nome da origem do arquivo; só a exibição muda.
@@ -106,6 +106,17 @@ def mes_do_arquivo(path):
     return None
 
 
+def _arquivos(pasta, padrao):
+    """
+    Lista arquivos ignorando os temporários de bloqueio do Excel ("~$nome.xlsx"),
+    que aparecem enquanto a planilha está aberta e não são planilhas de verdade.
+    """
+    return sorted(
+        c for c in glob.glob(os.path.join(pasta, padrao))
+        if not os.path.basename(c).startswith(("~$", ".~"))
+    )
+
+
 def _subpastas(caminho):
     if not os.path.isdir(caminho):
         return []
@@ -126,10 +137,10 @@ def formato_jornada(pasta):
         return None
     # O par __defeitos.csv identifica o NBA já convertido; sem ele, um CSV solto
     # é uma jornada de RPA.
-    if (glob.glob(os.path.join(pasta, "*" + NBA_SUF_DEFEITOS))
-            or glob.glob(os.path.join(pasta, "*.xlsx"))):
+    if (_arquivos(pasta, "*" + NBA_SUF_DEFEITOS)
+            or _arquivos(pasta, "*.xlsx")):
         return "nba"
-    if glob.glob(os.path.join(pasta, "*.csv")):
+    if _arquivos(pasta, "*.csv"):
         return "rpa"
     return None
 
@@ -212,7 +223,7 @@ def _ler_jornada_rpa(pasta):
     """
     partes = [
         pd.read_csv(f, sep=RPA_SEP, encoding=RPA_ENCODING, dtype=str, low_memory=False)
-        for f in sorted(glob.glob(os.path.join(pasta, "*.csv")))
+        for f in _arquivos(pasta, "*.csv")
     ]
     bruto = pd.concat(partes, ignore_index=True)
     bruto = bruto.loc[:, ~bruto.columns.str.startswith("Unnamed:")]
@@ -264,13 +275,18 @@ def _catalogo_nba(cat):
     aqui o papel do Octane. Devolve um DataFrame no formato das colunas DFT_*.
     """
     tipo = cat["Tipo de Chamado"].fillna("").str.strip().str.upper()
-    status = cat["Status do Chamado"].fillna("").str.strip()
     return pd.DataFrame({
         "DefectNumber_orig": cat[NBA_COL_DEFEITO].fillna("").str.strip(),
-        "DFT_Name": cat["Título do Defeito"],
-        # Só o catálogo diz em que pé está o chamado: 0 segue em tratamento,
-        # 1 está em avaliação por MOPs.
-        "DFT_Phase": status.map({"0": "Em Tratamento", "1": FASE_MOPS_NBA}),
+        # O título vem com tabulação/quebra no meio, que o matplotlib desenha
+        # como caixinha de glifo ausente no PNG do dashboard.
+        "DFT_Name": (cat["Título do Defeito"].fillna("")
+                     .str.replace(r"\s+", " ", regex=True).str.strip()),
+        # Todo pedido com defeito está em tratamento; o "Status do Chamado" da
+        # planilha não entra na conta.
+        "DFT_Phase": FASE_TRATAMENTO_NBA,
+        # A data de implantação é o equivalente ao Bugfix Milestone: separa o
+        # que é "Planejado" do que fica "s/ data" e alimenta o Planejamento
+        # de Redução.
         "DFT_BugfixMilestone": pd.to_datetime(
             cat["Data de Implantação"], format="%d/%m/%Y", errors="coerce"),
         # Nomes vêm com caixa e espaços inconsistentes ("Gilberto", "gilberto",
@@ -298,7 +314,7 @@ def _ler_jornada_nba(pasta):
 
     # Pares já convertidos (rápido).
     convertidos = set()
-    for arq_def in sorted(glob.glob(os.path.join(pasta, "*" + NBA_SUF_DEFEITOS))):
+    for arq_def in _arquivos(pasta, "*" + NBA_SUF_DEFEITOS):
         base = arq_def[: -len(NBA_SUF_DEFEITOS)]
         arq_an = base + NBA_SUF_ANALITICO
         if not os.path.isfile(arq_an):
@@ -308,7 +324,7 @@ def _ler_jornada_nba(pasta):
 
     # XLSX ainda não convertidos continuam sendo lidos direto, para que largar um
     # arquivo novo na pasta funcione sem passar pelo converter.
-    for arq in sorted(glob.glob(os.path.join(pasta, "*.xlsx"))):
+    for arq in _arquivos(pasta, "*.xlsx"):
         if os.path.splitext(os.path.basename(arq))[0] in convertidos:
             continue
         _registrar(
@@ -512,6 +528,13 @@ def carregar_base(base_dir, jornada):
     if "TemDefeito" not in df.columns:
         df["TemDefeito"] = (df["DefectNumber__c"] > 0) & (df["DefectNumber__c"] != 999999)
     df["TemDefeito"] = df["TemDefeito"].fillna(False).astype(bool)
+    # Identificador do defeito para agrupar e exibir: o número quando existe,
+    # senão o próprio rótulo — é o caso dos BRJ-* do NBA e dos "Paliativo RPA"
+    # do PME, que são defeitos de verdade sem número.
+    df["DefectKey"] = (
+        df["DefectNumber__c"].astype(str)
+        .where(df["DefectNumber__c"] > 0, df["DefectNumber_orig"])
+    )
 
     # Desduplicar por OrderNumber mantendo a linha mais informativa:
     #   1º) DFT real (número > 0);

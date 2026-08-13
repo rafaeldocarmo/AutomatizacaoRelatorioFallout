@@ -60,7 +60,7 @@ def _montar_dados(jornada, ns):
             "Falha" if ri == 0 else "",
             "Em Tratamento/Avaliação pela Squad" if ri == 0 else "",
             "US" if tipo == "User Story" else "Defeito",
-            fmt_id({"DefectNumber__c": row["DefectNumber__c"], "DFT_BugfixMilestone": row["DFT_BugfixMilestone"]}),
+            fmt_id({"DefectKey": row["DefectKey"], "DFT_BugfixMilestone": row["DFT_BugfixMilestone"]}),
             fmt_ms(row["DFT_BugfixMilestone"]),
             str(row["DFT_Name"]) if pd.notna(row["DFT_Name"]) else "",
             str(row["DFT_Team"])[:35] if pd.notna(row["DFT_Team"]) else "",
@@ -287,7 +287,7 @@ def _montar_slide_top_ofensores(prs, ns_consolidado, ns_por_jornada, top_n=15):
         for _, row in pivot2.iterrows():
             tipo = str(row["DFT_Type"]).strip() if pd.notna(row["DFT_Type"]) else ""
             tipo_fmt = "US" if tipo == "User Story" else "Defeito"
-            id_str = fmt_id({"DefectNumber__c": row["DefectNumber__c"],
+            id_str = fmt_id({"DefectKey": row["DefectKey"],
                               "DFT_BugfixMilestone": row["DFT_BugfixMilestone"]})
             ms_fmt = fmt_ms(row["DFT_BugfixMilestone"])
             nome = str(row["DFT_Name"]) if pd.notna(row["DFT_Name"]) else ""
