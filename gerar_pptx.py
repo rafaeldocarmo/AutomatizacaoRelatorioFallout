@@ -142,7 +142,7 @@ def _rowh(tbl, h):
 def _montar_slide(prs, d, chart_png):
     slide = prs.slides.add_slide(prs.slide_layouts[6])
 
-    tb = slide.shapes.add_shape(1, Inches(0), Inches(0.05), Inches(13.333), Inches(0.5))
+    tb = slide.shapes.add_shape(1, Inches(0), Inches(0), Inches(13.333), Inches(0.55))
     tb.fill.solid(); tb.fill.fore_color.rgb = RED; tb.line.fill.background()
     p = tb.text_frame.paragraphs[0]; p.alignment = PP_ALIGN.CENTER
     r = p.add_run(); r.text = d["title"]
@@ -152,14 +152,16 @@ def _montar_slide(prs, d, chart_png):
         gf = slide.shapes.add_table(nr, nc, Inches(x), Inches(y), Inches(w), Inches(h))
         _no_style(gf.table); return gf.table
 
-    LX, LW = 0.18, 5.75; y = 0.68
+    LX, LW = 0.18, 5.75; y = 0.62
     vm = d["volume"]["months"]; drows_d = d["dist"]["rows"]; prows = d["plan"]["rows"]
     n_plan = 1 + sum(1 + len(r["dfts"]) for r in prows)
     left_total = (2 + len(d["volume"]["rows"])) + (1 + len(drows_d)) + n_plan
-    if left_total <= 24:   RH, FD, FT = 0.135, 6.5, 7.5
-    elif left_total <= 30: RH, FD, FT = 0.115, 5.5, 6.3
-    else:                  RH, FD, FT = 0.102, 5.0, 5.8
     GAP = 0.04
+    # Fonte fixa em 8pt. A linha fica no mínimo que 8pt exige em vez de esticar
+    # para ocupar o espaço: o bloco da esquerda disputa altura com a tabela de
+    # detalhe lá embaixo, e esticar aqui comia as linhas de defeito de lá.
+    FD, FT = 8.0, 9.0
+    RH = 0.16
 
     vt = add_tbl(2 + len(d["volume"]["rows"]), 1 + len(vm), LX, y, LW, RH * (2 + len(d["volume"]["rows"])))
     vlabw = 2.5; vcolw = (LW - vlabw) / len(vm)
@@ -210,18 +212,43 @@ def _montar_slide(prs, d, chart_png):
 
     cols = d["detalhe"]["cols"]; drows = d["detalhe"]["rows"]
     dety = max(left_bottom, chart_bottom) + GAP
+    LARG_DET = 13.333
+    ws = [0.95, 1.45, 0.7, 0.9, 1.1, 3.9, 1.65, 1.35]
+    ws += [(LARG_DET - sum(ws)) / len(cols[8:])] * len(cols[8:])
+    COL_NOME_DET = 5                      # "Nome Defeito" dentro de row["cells"]
+    f_base, f_nome, f_sec = 9.0, 8.0, 8.5
+
+    # O nome do defeito vai inteiro e quebra em várias linhas, e o PowerPoint
+    # estica a linha sozinho — era isso que jogava a tabela para fora do slide.
+    # A altura de cada linha é estimada pelo tamanho do nome e as que não
+    # couberem saem, preservando os defeitos de maior peso, que vêm primeiro.
+    def _altura_det(nome):
+        por_linha = max(int((ws[COL_NOME_DET] - 0.06) * 21.0), 10)
+        linhas = max(1, -(-len(str(nome)) // por_linha))
+        return max(0.24, linhas * f_nome * 1.25 / 72 + 0.06)
+
+    disponivel = 7.5 - dety - 0.08
+    rh_cab = 0.32
+    usado_det = rh_cab
+    linhas_ok = []
+    for row in drows:
+        h = rh_cab if row["kind"] == "sucesso" else _altura_det(row["cells"][COL_NOME_DET])
+        if usado_det + h > disponivel:
+            break
+        usado_det += h
+        linhas_ok.append((row, h))
+    fora_det = len(drows) - len(linhas_ok)
+    drows = [r for r, _ in linhas_ok]
     n = 1 + len(drows)
-    # Nomes de defeito não são mais truncados e podem quebrar linha (word_wrap
-    # já ligado em _cell) — o PowerPoint cresce a linha automaticamente para
-    # caber o texto, então a altura calculada aqui é só um ponto de partida.
-    rh = max(0.11, min(0.32, (7.42 - dety) / n))
-    if rh >= 0.20:   f_base, f_nome, f_sec = 11.0, 10.0, 10.5
-    elif rh >= 0.15: f_base, f_nome, f_sec = 9.0, 8.0, 8.5
-    else:            f_base, f_nome, f_sec = 7.5, 6.5, 7.0
-    ws = [0.95, 1.5, 0.7, 0.95, 1.15, 3.55, 1.7, 1.4]
-    ws += [(13.0 - sum(ws)) / len(cols[8:])] * len(cols[8:])
-    dt2 = add_tbl(n, len(cols), 0.18, dety, 13.0, rh * n)
-    _widths(dt2, ws); _rowh(dt2, rh)
+
+    dt2 = add_tbl(n, len(cols), 0.0, dety, LARG_DET, usado_det)
+    _widths(dt2, ws)
+    dt2.rows[0].height = Inches(rh_cab)
+    for i, (_, h) in enumerate(linhas_ok):
+        dt2.rows[1 + i].height = Inches(h)
+    if fora_det:
+        print(f"  [slide] {d['title'][:28]}: {fora_det} defeito(s) fora do slide, "
+              f"descartados por falta de espaço")
     for ci, col in enumerate(cols):
         _cell(dt2.cell(0, ci), col, f_base, bold=True, fg=WHITE, bg=RED)
     for ri, row in enumerate(drows):
@@ -275,7 +302,7 @@ def _montar_slide_top_ofensores(prs, ns_consolidado, ns_por_jornada, top_n=15):
     top_linhas = [cells for _, cells in candidatos[:top_n]]
 
     slide = prs.slides.add_slide(prs.slide_layouts[6])
-    tb = slide.shapes.add_shape(1, Inches(0), Inches(0.05), Inches(13.333), Inches(0.5))
+    tb = slide.shapes.add_shape(1, Inches(0), Inches(0), Inches(13.333), Inches(0.55))
     tb.fill.solid(); tb.fill.fore_color.rgb = RED; tb.line.fill.background()
     p = tb.text_frame.paragraphs[0]; p.alignment = PP_ALIGN.CENTER
     r = p.add_run(); r.text = "Consolidado - Top Ofensores - Defeitos com Squad"
@@ -287,20 +314,46 @@ def _montar_slide_top_ofensores(prs, ns_consolidado, ns_por_jornada, top_n=15):
 
     COLS = ["Classificação", "Agrupamento", "Jornada", "Tipo", "Defeito/US",
             "Data Prod\nnão resolvidos", "Nome Defeito", "Time", "Status\nDefeito/US"] + labels_tab
-    ws = [0.7, 1.65, 0.8, 0.65, 0.85, 1.05, 3.1, 1.45, 1.3]
-    ws += [(13.0 - sum(ws)) / len(labels_tab)] * len(labels_tab)
+    LARGURA = 13.333                       # ocupa o slide inteiro
+    ws = [0.7, 1.6, 0.8, 0.6, 0.85, 1.0, 3.75, 1.45, 1.25]
+    ws += [(LARGURA - sum(ws)) / len(labels_tab)] * len(labels_tab)
+    COL_NOME = 6                           # índice de "Nome Defeito" em COLS
 
-    n_data = 1 + len(top_linhas)          # linha Sucesso + top N linhas de falha
-    n_total = 1 + n_data                  # + cabeçalho
-    # Nomes de defeito não são mais truncados e podem quebrar linha — a altura
-    # calculada aqui é só um ponto de partida (o PowerPoint cresce a linha
-    # automaticamente para caber o texto).
-    rh = max(0.30, min(0.55, 6.4 / max(n_data, 1)))
-    y = 0.68
-    FS_BASE, FS_SEC = 10.0, 9.0   # fontes no maior tamanho possível para essa tabela
+    y = 0.62
+    FS_BASE, FS_SEC, FS_NOME = 10.0, 9.0, 8.0
+    ALTURA_UTIL = 7.5 - y - 0.08           # até a borda de baixo do slide
 
-    tbl = add_tbl(n_total, len(COLS), 0.18, y, 13.0, rh * n_total)
-    _widths(tbl, ws); _rowh(tbl, rh)
+    # O nome do defeito não é truncado, então a célula quebra em várias linhas e
+    # o PowerPoint estica a linha sozinho — é o que jogava a tabela para fora do
+    # slide. Aqui a altura de cada linha é estimada pelo tamanho do nome e as
+    # que não couberem são descartadas, mantendo os defeitos de maior peso.
+    def _altura(nome):
+        # ~2,1 caracteres por 0,01" de largura na fonte 8pt
+        por_linha = max(int((ws[COL_NOME] - 0.06) * 21.0), 10)
+        linhas = max(1, -(-len(str(nome)) // por_linha))
+        return max(0.30, linhas * FS_NOME * 1.25 / 72 + 0.06)
+
+    rh_cab = 0.42                          # cabeçalho em duas linhas + Sucesso
+    usado = rh_cab * 2
+    cabem = []
+    for cells in top_linhas:
+        h = _altura(cells[4])              # 4 = Nome Defeito dentro de `cells`
+        if usado + h > ALTURA_UTIL:
+            break
+        usado += h
+        cabem.append((cells, h))
+    cortados = len(top_linhas) - len(cabem)
+    top_linhas = [c for c, _ in cabem]
+
+    n_data = 1 + len(top_linhas)           # linha Sucesso + linhas que couberam
+    n_total = 1 + n_data                   # + cabeçalho
+
+    tbl = add_tbl(n_total, len(COLS), 0.0, y, LARGURA, usado)
+    _widths(tbl, ws)
+    tbl.rows[0].height = Inches(rh_cab)
+    tbl.rows[1].height = Inches(rh_cab)
+    for i, (_, h) in enumerate(cabem):
+        tbl.rows[2 + i].height = Inches(h)
 
     for ci, col in enumerate(COLS):
         _cell(tbl.cell(0, ci), col, FS_BASE, bold=True, fg=WHITE, bg=RED)
@@ -321,7 +374,10 @@ def _montar_slide_top_ofensores(prs, ns_consolidado, ns_por_jornada, top_n=15):
         _cell(tbl.cell(row_idx, 1), "Em Tratamento/Avaliação\npela Squad" if ri == 0 else "", FS_SEC, bg=bg)
         for ci, val in enumerate(cells):
             al = "left" if ci == 4 else "center"       # 4 = Nome Defeito
-            fs = FS_SEC if ci in (0, 5, 6) else FS_BASE
+            fs = FS_NOME if ci == 4 else (FS_SEC if ci in (0, 5, 6) else FS_BASE)
             _cell(tbl.cell(row_idx, 2 + ci), val, fs, bg=bg, align=al)
 
     _sem_bordas(tbl)
+    if cortados:
+        print(f"  [slide] Top Ofensores: {cortados} defeito(s) fora do slide, "
+              f"descartados por falta de espaço")
