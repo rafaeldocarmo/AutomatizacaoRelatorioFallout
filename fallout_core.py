@@ -79,6 +79,7 @@ NBA_SUF_ANALITICO = "__analitico.csv"
 NBA_SUF_DEFEITOS = "__defeitos.csv"
 NBA_COL_STATUS = "Status"
 NBA_VALOR_SUCESSO = "SUCESSO"
+NBA_VALOR_CANCELADO = "CANCELADO"        # vira a categoria "Legado Aberto"
 NBA_COL_DATA = "Data"
 NBA_COL_DEFEITO = "Defeito"
 RENAME_NBA = {
@@ -374,6 +375,12 @@ def _ler_jornada_nba(pasta):
     numero = pd.to_numeric(df["DefectNumber_orig"], errors="coerce")
     df["DefectNumber__c"] = numero.fillna(-1).astype(int)   # preserva o 999999
     df["TemDefeito"] = (df["DefectNumber_orig"] != "") & (df["DefectNumber__c"] != 999999)
+    # Categoria exclusiva desta jornada: o que a origem marca como CANCELADO é
+    # legado em aberto. A marca sai daqui, e não do valor da coluna, porque
+    # "Cancelado" também aparece no SubStatus de outras jornadas.
+    df["LegadoAberto"] = (
+        df["SubStatus"].fillna("").astype(str).str.strip().str.upper() == NBA_VALOR_CANCELADO
+    )
 
     df = df.merge(catalogo, on="DefectNumber_orig", how="left")
     return df, sucessos
@@ -533,6 +540,9 @@ def carregar_base(base_dir, jornada):
     if "TemDefeito" not in df.columns:
         df["TemDefeito"] = (df["DefectNumber__c"] > 0) & (df["DefectNumber__c"] != 999999)
     df["TemDefeito"] = df["TemDefeito"].fillna(False).astype(bool)
+    if "LegadoAberto" not in df.columns:
+        df["LegadoAberto"] = False
+    df["LegadoAberto"] = df["LegadoAberto"].fillna(False).astype(bool)
     # Identificador do defeito para agrupar e exibir: o número quando existe,
     # senão o próprio rótulo — é o caso dos BRJ-* do NBA e dos "Paliativo RPA"
     # do PME, que são defeitos de verdade sem número.
@@ -625,10 +635,20 @@ def categorizar(df, mes, hoje=None):
 
     _fase = df_mes["DFT_Phase"].fillna("").str.strip()
 
+    # Legado em aberto: nas jornadas de extração vem da fase "Cancelado" do
+    # Octane; no Base Residencial os defeitos não têm essa fase, e a marca é
+    # feita na leitura a partir da Classificação Original. Ela é exclusiva dessa
+    # jornada de propósito — "Cancelado" também aparece no SubStatus do Prospect,
+    # onde a regra não vale.
+    _legado = _tem_defeito & _fase.isin(FASES_LEGADO)
+    if "LegadoAberto" in df_mes.columns:
+        _legado = _legado | df_mes["LegadoAberto"].fillna(False).astype(bool)
+
     cats = {
         "Em Tratamento/Avaliação pela Squad": df_mes[
             _tem_defeito &
             ~_fase.isin(FASES_FORA_TRATAMENTO) &
+            ~_legado &
             ~_email_mops_mask &
             ~_encerrado
         ],
@@ -636,6 +656,7 @@ def categorizar(df, mes, hoje=None):
         "Falha Pontual": df_mes[df_mes["DefectNumber__c"] == 999999],
         "Falta Associar ao Defeito/US": df_mes[
             ~_tem_defeito &
+            ~_legado &
             (df_mes["DefectNumber__c"] != 999999) &
             ~_outros_mask & ~_erro_proc_mask & ~_email_mops_mask
         ],
@@ -645,7 +666,7 @@ def categorizar(df, mes, hoje=None):
         "Em Avaliação por MOPs": df_mes[
             (_tem_defeito & _fase.isin(FASES_MOPS)) | _email_mops_mask
         ],
-        "Legado Aberto": df_mes[_tem_defeito & _fase.isin(FASES_LEGADO)],
+        "Legado Aberto": df_mes[_legado],
         "Em avaliação - Outros times": df_mes[_outros_mask],
         "Falha no Processo Usuário": df_mes[_erro_proc_mask],
     }
