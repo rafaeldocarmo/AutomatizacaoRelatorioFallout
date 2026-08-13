@@ -154,6 +154,7 @@ def gerar_relatorio(base_dir, jornada):
     falta_assoc = cats["Falta Associar ao Defeito/US"]
     tratado = cats["Tratado - Em avaliação de eficácia"]
     mops = cats["Em Avaliação por MOPs"]
+    legado = cats["Legado Aberto"]
     outros_times = cats["Em avaliação - Outros times"]
     erro_processo = cats["Falha no Processo Usuário"]
 
@@ -170,7 +171,7 @@ def gerar_relatorio(base_dir, jornada):
         print(f"  Type                 : {r['DFT_Type']}")
         _in_mops = _rows_dft["DFT_Phase"].fillna("").str.strip().isin(FASES_MOPS).any()
         _in_enc = (_rows_dft["DFT_Phase"].fillna("").str.strip().isin(FASES_CORRIGIDO) & _rows_dft["DFT_BugfixMilestone"].notna()).any()
-        print(f"  Phase é MOPs (Cancelado/Rejeitado) : {_in_mops}")
+        print(f"  Phase é MOPs (Rejeitado) : {_in_mops}")
         print(f"  Está encerrado (Corrigido+Milestone): {_in_enc}")
         print(f"  Aparece em em_trat   : {(em_trat['DefectNumber__c'] == _DFT_DEBUG).any()}")
     else:
@@ -219,7 +220,8 @@ def gerar_relatorio(base_dir, jornada):
     )
     reducao["Pct"] = reducao["Pct_plena"]
 
-    soma = len(em_trat) + len(resolvido) + len(pontual) + len(falta_assoc) + len(tratado) + len(mops) + len(outros_times) + len(erro_processo)
+    soma = (len(em_trat) + len(resolvido) + len(pontual) + len(falta_assoc)
+            + len(tratado) + len(mops) + len(legado) + len(outros_times) + len(erro_processo))
     print(f"\nDistribuição Fallout {MESES_LABEL[mes_atual]} ({fallout_pct:.2f}%)")
     print(f"  Em Tratamento          {pct(len(em_trat)):.2f}%  (Planej:{pct(len(planejado)):.2f}% | US s/data:{pct(len(us_sem_data)):.2f}% | DFT s/data:{pct(len(dft_sem_data)):.2f}%)")
     print(f"  Resolvido              {pct(len(resolvido)):.2f}%")
@@ -227,6 +229,7 @@ def gerar_relatorio(base_dir, jornada):
     print(f"  Falta associar         {pct(len(falta_assoc)):.2f}%")
     print(f"  Tratado - eficácia     {pct(len(tratado)):.2f}%")
     print(f"  Em Avaliação MOPs      {pct(len(mops)):.2f}%")
+    print(f"  Legado Aberto          {pct(len(legado)):.2f}%")
     print(f"  Outros times           {pct(len(outros_times)):.2f}%")
     print(f"  Falha Processo Usuário {pct(len(erro_processo)):.2f}%")
     print(f"  Total categorizado: {soma}/{len(df_mes)}")
@@ -248,6 +251,7 @@ def gerar_relatorio(base_dir, jornada):
         ("Falta associar problema ao Defeito/US", f"{pct(len(falta_assoc)):.2f}%", 0, False),
         ("Tratado - Em avaliação de eficácia", f"{pct(len(tratado)):.2f}%", 0, False),
         ("Em Avaliação por MOPs", f"{pct(len(mops)):.2f}%", 0, False),
+        ("Legado Aberto", f"{pct(len(legado)):.2f}%", 0, False),
         ("Em avaliação - Outros times", f"{pct(len(outros_times)):.2f}%", 0, False),
         ("Falha no Processo Usuário", f"{pct(len(erro_processo)):.2f}%", 0, False),
         (f"Planejamento Redução ({reducao['Pct_plena'].sum():.2f}% pleno)", "", 0, True),
@@ -641,6 +645,7 @@ def gerar_relatorio(base_dir, jornada):
         ("Falta associar problema ao Defeito/US", pct(len(falta_assoc)), False, False),
         ("Tratado - Em avaliação de eficácia", pct(len(tratado)), False, False),
         ("Em Avaliação por MOPs", pct(len(mops)), False, False),
+        ("Legado Aberto", pct(len(legado)), False, False),
         ("Em avaliação - Outros times", pct(len(outros_times)), False, False),
         ("Falha no Processo Usuário", pct(len(erro_processo)), False, False),
     ]

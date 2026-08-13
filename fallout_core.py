@@ -20,7 +20,12 @@ MESES_PT = {1: "Jan", 2: "Fev", 3: "Mar", 4: "Abr", 5: "Mai", 6: "Jun",
 MESES_LABEL = {m: f"{abrev}-26" for abrev, m in ABREV_MES.items()}
 
 FASES_CORRIGIDO = {"Corrigido", "Fechado"}
-FASES_MOPS = {"Cancelado", "Rejeitado"}
+FASES_MOPS = {"Rejeitado"}
+# Defeito cancelado no Octane significa que o problema ficou com o legado, sem
+# correção prevista — é categoria própria, não avaliação por MOPs.
+FASES_LEGADO = {"Cancelado"}
+# Nenhuma das duas está em tratamento pela squad.
+FASES_FORA_TRATAMENTO = FASES_MOPS | FASES_LEGADO
 # Fase única das jornadas com catálogo próprio (NBA): todo pedido com defeito
 # associado está em tratamento.
 FASE_TRATAMENTO_NBA = "Em Tratamento"
@@ -618,10 +623,12 @@ def categorizar(df, mes, hoje=None):
     else:
         _tem_defeito = (df_mes["DefectNumber__c"] > 0) & (df_mes["DefectNumber__c"] != 999999)
 
+    _fase = df_mes["DFT_Phase"].fillna("").str.strip()
+
     cats = {
         "Em Tratamento/Avaliação pela Squad": df_mes[
             _tem_defeito &
-            ~df_mes["DFT_Phase"].fillna("").str.strip().isin(FASES_MOPS) &
+            ~_fase.isin(FASES_FORA_TRATAMENTO) &
             ~_email_mops_mask &
             ~_encerrado
         ],
@@ -636,10 +643,9 @@ def categorizar(df, mes, hoje=None):
             _corrigido & _tem_ms & (milestone_dt >= quinze_dias) & (milestone_dt <= hoje)
         ],
         "Em Avaliação por MOPs": df_mes[
-            (_tem_defeito &
-             df_mes["DFT_Phase"].fillna("").str.strip().isin(FASES_MOPS)) |
-            _email_mops_mask
+            (_tem_defeito & _fase.isin(FASES_MOPS)) | _email_mops_mask
         ],
+        "Legado Aberto": df_mes[_tem_defeito & _fase.isin(FASES_LEGADO)],
         "Em avaliação - Outros times": df_mes[_outros_mask],
         "Falha no Processo Usuário": df_mes[_erro_proc_mask],
     }
