@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import os
+from datetime import datetime
 import fallout_core
 from fallout_core import MESES_PT
 
@@ -359,8 +360,11 @@ with faixa_topo:
             with st.spinner("Gerando PowerPoint completo (isso lê todos os dados, pode levar um tempo)..."):
                 pptx_bytes = gerar_pptx_completo(_data_dir).getvalue()
             _PPTX_MIME = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-            disparar_download(pptx_bytes, "relatorio_completo.pptx", _PPTX_MIME)
-            st.success("PowerPoint completo gerado — o download deve começar automaticamente.")
+            # Data e hora no nome para os relatórios não se sobrescreverem na
+            # pasta de downloads; o formato ordena junto com a ordem cronológica.
+            _nome = f"RelatorioExecutivo_{datetime.now():%Y-%m-%d_%H%M}.pptx"
+            disparar_download(pptx_bytes, _nome, _PPTX_MIME)
+            st.success(f"PowerPoint gerado: **{_nome}** — o download deve começar automaticamente.")
 
     st.caption("PowerPoint: 3 colunas + Top Ofensores + um slide por jornada. "
                "Os dados são lidos da pasta `extracoes/` e ficam em cache — use "

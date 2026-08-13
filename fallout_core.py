@@ -27,7 +27,7 @@ FASES_MOPS = {"Cancelado", "Rejeitado", FASE_MOPS_NBA}
 
 # Pasta da jornada → nome mostrado no app e no título do slide. A pasta segue
 # com o nome da origem do arquivo; só a exibição muda.
-NOMES_EXIBICAO = {"NBA": "Base Residencial"}
+NOMES_EXIBICAO = {"NBA": "Base Residencial", "PME": "PME Móvel"}
 
 # Pasta local (dentro do projeto) com as jornadas e as planilhas do Octane.
 PASTA_DADOS = "extracoes"
@@ -68,6 +68,10 @@ RPA_ROTULOS_NAO_DEFEITO = {
 # que é o catálogo local — aqui os defeitos são BRJ-*, não existem no Octane.
 NBA_ABA_ANALITICO = "Analitico"
 NBA_ABA_DEFEITOS = "Defeitos"
+# Ler XLSX com openpyxl é lento (~40 s para os três meses). converter_nba.py
+# grava cada planilha como um par de CSVs, que o leitor prefere quando existe.
+NBA_SUF_ANALITICO = "__analitico.csv"
+NBA_SUF_DEFEITOS = "__defeitos.csv"
 NBA_COL_STATUS = "Status"
 NBA_VALOR_SUCESSO = "SUCESSO"
 NBA_COL_DATA = "Data"
@@ -120,7 +124,10 @@ def formato_jornada(pasta):
         return "extracao"
     if not os.path.isdir(pasta):
         return None
-    if glob.glob(os.path.join(pasta, "*.xlsx")):
+    # O par __defeitos.csv identifica o NBA já convertido; sem ele, um CSV solto
+    # é uma jornada de RPA.
+    if (glob.glob(os.path.join(pasta, "*" + NBA_SUF_DEFEITOS))
+            or glob.glob(os.path.join(pasta, "*.xlsx"))):
         return "nba"
     if glob.glob(os.path.join(pasta, "*.csv")):
         return "rpa"
@@ -251,12 +258,11 @@ def _ler_jornada_rpa(pasta):
     return df, sucessos
 
 
-def _ler_catalogo_nba(caminho):
+def _catalogo_nba(cat):
     """
-    Aba "Defeitos": o catálogo local de defeitos BRJ-*, que faz aqui o papel do
-    Octane. Devolve um DataFrame já no formato das colunas DFT_*.
+    Normaliza a aba/CSV "Defeitos": o catálogo local de defeitos BRJ-*, que faz
+    aqui o papel do Octane. Devolve um DataFrame no formato das colunas DFT_*.
     """
-    cat = pd.read_excel(caminho, sheet_name=NBA_ABA_DEFEITOS, dtype=str)
     tipo = cat["Tipo de Chamado"].fillna("").str.strip().str.upper()
     status = cat["Status do Chamado"].fillna("").str.strip()
     return pd.DataFrame({
@@ -283,12 +289,35 @@ def _ler_jornada_nba(pasta):
     existem lá.
     """
     partes, catalogos = [], []
-    for arq in sorted(glob.glob(os.path.join(pasta, "*.xlsx"))):
-        analitico = pd.read_excel(arq, sheet_name=NBA_ABA_ANALITICO, dtype=str)
+
+    def _registrar(analitico, defeitos):
         partes.append(analitico)
         # Guarda até quando o arquivo vai, para saber qual catálogo é o mais novo.
         ate = pd.to_datetime(analitico[NBA_COL_DATA], format="%d/%m/%Y", errors="coerce").max()
-        catalogos.append((ate, _ler_catalogo_nba(arq)))
+        catalogos.append((ate, _catalogo_nba(defeitos)))
+
+    # Pares já convertidos (rápido).
+    convertidos = set()
+    for arq_def in sorted(glob.glob(os.path.join(pasta, "*" + NBA_SUF_DEFEITOS))):
+        base = arq_def[: -len(NBA_SUF_DEFEITOS)]
+        arq_an = base + NBA_SUF_ANALITICO
+        if not os.path.isfile(arq_an):
+            raise FileNotFoundError(f"Falta o par de {os.path.basename(arq_def)}: {arq_an}")
+        convertidos.add(os.path.basename(base))
+        _registrar(pd.read_csv(arq_an, dtype=str), pd.read_csv(arq_def, dtype=str))
+
+    # XLSX ainda não convertidos continuam sendo lidos direto, para que largar um
+    # arquivo novo na pasta funcione sem passar pelo converter.
+    for arq in sorted(glob.glob(os.path.join(pasta, "*.xlsx"))):
+        if os.path.splitext(os.path.basename(arq))[0] in convertidos:
+            continue
+        _registrar(
+            pd.read_excel(arq, sheet_name=NBA_ABA_ANALITICO, dtype=str),
+            pd.read_excel(arq, sheet_name=NBA_ABA_DEFEITOS, dtype=str),
+        )
+
+    if not partes:
+        raise FileNotFoundError(f"Nenhuma planilha do NBA encontrada em {pasta}")
     bruto = pd.concat(partes, ignore_index=True)
 
     # O mesmo defeito aparece em vários arquivos e muda de status ao longo do
