@@ -8,8 +8,10 @@ Este módulo não depende de Streamlit nem de estado global — todas as funçõ
 recebem `base_dir` explicitamente e retornam dados, para poder ser chamado
 com segurança a partir de múltiplas sessões/threads simultâneas.
 """
+import csv
 import glob
 import os
+import re
 
 import pandas as pd
 
@@ -20,12 +22,11 @@ MESES_PT = {1: "Jan", 2: "Fev", 3: "Mar", 4: "Abr", 5: "Mai", 6: "Jun",
 MESES_LABEL = {m: f"{abrev}-26" for abrev, m in ABREV_MES.items()}
 
 FASES_CORRIGIDO = {"Corrigido", "Fechado"}
-FASES_MOPS = {"Rejeitado"}
-# Defeito cancelado no Octane significa que o problema ficou com o legado, sem
-# correção prevista — é categoria própria, não avaliação por MOPs.
-FASES_LEGADO = {"Cancelado"}
-# Nenhuma das duas está em tratamento pela squad.
-FASES_FORA_TRATAMENTO = FASES_MOPS | FASES_LEGADO
+FASES_MOPS = {"Cancelado", "Rejeitado"}
+# "Legado Aberto" existe apenas no Base Residencial, marcado na leitura a partir
+# da Classificação Original. Nas jornadas de extração o defeito cancelado no
+# Octane continua sendo avaliação por MOPs, como sempre foi.
+FASES_FORA_TRATAMENTO = FASES_MOPS
 # Fase única das jornadas com catálogo próprio (NBA): todo pedido com defeito
 # associado está em tratamento.
 FASE_TRATAMENTO_NBA = "Em Tratamento"
@@ -101,6 +102,28 @@ RENAME_FALHAS = {
     "vlocity_cmt__State__c": "State",
     "vlocity_cmt__OrchestrationPlanId__r.vlocity_cmt__OrderId__r.vlocity_cmt__Reason__c": "Reason",
 }
+
+# A partir de ago/26 o mesmo relatório de falhas passou a ser exportado com o
+# rótulo em português no lugar do nome de API. Os dois layouts convivem na pasta
+# porque os meses anteriores continuam com os arquivos antigos.
+COL_DATA_FALHAS_PT = "Data de Criação"
+RENAME_FALHAS_PT = {
+    COL_DATA_FALHAS_PT: "CreatedDate",
+    "Número do pedido": "OrderNumber",
+    "Canal": "Channel",
+    "Segmento Comercial": "Segment",
+    "Status": "OrderStatus",
+    "Status Biometria": "BiometryStatus",
+    "Número Defeito": "DefectNumber__c",
+    "Nome do Ofensor": "OffenderName__c",
+    "Erro Tratado": "ErrorHandled__c",
+}
+
+# Sucessos, também em dois layouts: até jul/26 um agregado de uma linha só
+# (coluna "expr0" com o total do mês); de ago/26 em diante um relatório com
+# cabeçalho de filtros e uma linha por dia ("01/08/2026,1555").
+SUC_COL_AGREGADA = "expr0"
+SUC_DATA_DIA = re.compile(r"^(\d{2})/(\d{2})/(\d{4})$")
 
 
 def mes_do_arquivo(path):
@@ -409,6 +432,56 @@ def _norm_id(v):
         return str(v).strip()
 
 
+def _ler_falhas_extracao(caminho):
+    """
+    Lê um CSV da pasta falhas/ e devolve as colunas já no formato interno,
+    aceitando tanto o export com nome de API quanto o com rótulo em português.
+    """
+    df = pd.read_csv(caminho)
+    if COL_DATA_FALHAS_PT in df.columns:
+        df = df.rename(columns=RENAME_FALHAS_PT)
+        # O layout em português traz só a data, já no fuso de Brasília, enquanto
+        # o antigo traz o timestamp com offset. Localizar antes de normalizar
+        # para UTC evita que os pedidos do dia 1º caiam no mês anterior quando
+        # o resto do código converte de volta para America/Sao_Paulo.
+        df["CreatedDate"] = (
+            pd.to_datetime(df["CreatedDate"], errors="coerce")
+            .dt.tz_localize("America/Sao_Paulo")
+            .dt.tz_convert("UTC")
+        )
+    else:
+        df = df.rename(columns=RENAME_FALHAS)
+        df["CreatedDate"] = pd.to_datetime(df["CreatedDate"], utc=True, errors="coerce")
+    return df
+
+
+def _ler_sucessos(caminho, mes):
+    """
+    Total de sucessos do mês `mes` em um CSV da pasta sucessos/, nos dois
+    layouts de export.
+
+    Na quebra diária só entram os dias do próprio mês do arquivo: o relatório
+    cobre mês atual e anterior, e o anterior já tem CSV próprio — contar os dois
+    somaria o mesmo dia duas vezes.
+    """
+    with open(caminho, encoding="utf-8-sig", newline="") as fh:
+        linhas = list(csv.reader(fh))
+
+    if any(SUC_COL_AGREGADA in celula for celula in (linhas[0] if linhas else [])):
+        col = pd.read_csv(caminho)[SUC_COL_AGREGADA]
+        return int(pd.to_numeric(col, errors="coerce").fillna(0).sum())
+
+    total = 0
+    for linha in linhas:
+        celulas = [c.strip() for c in linha if c.strip()]
+        if len(celulas) != 2:
+            continue
+        dia = SUC_DATA_DIA.match(celulas[0])
+        if dia and int(dia.group(2)) == mes:
+            total += int(re.sub(r"\D", "", celulas[1]) or 0)
+    return total
+
+
 def carregar_base(base_dir, jornada):
     """
     Lê falhas + sucessos (CSV) e Octane (Excel) para a jornada informada,
@@ -452,9 +525,9 @@ def carregar_base(base_dir, jornada):
             raise FileNotFoundError(f"{pasta} não parece uma jornada (sem falhas/ e sem CSV)")
 
     if arquivos_extracao:
-        df_ext = pd.concat([pd.read_csv(f) for f in arquivos_extracao], ignore_index=True)
-        df_ext["CreatedDate"] = pd.to_datetime(df_ext["CreatedDate"], utc=True, errors="coerce")
-        df_ext = df_ext.rename(columns=RENAME_FALHAS)
+        df_ext = pd.concat(
+            [_ler_falhas_extracao(f) for f in arquivos_extracao], ignore_index=True
+        )
 
         # O export do CRM às vezes traz o número do defeito com espaços não-quebráveis
         # no fim (ex.: "233538\xa0\xa0"). Sem limpar, pd.to_numeric devolve NaN e o
@@ -583,11 +656,11 @@ def carregar_base(base_dir, jornada):
             mes = mes_do_arquivo(f)
             if mes is None:
                 continue
-            df_tmp = pd.read_csv(f).rename(columns={"expr0": "Sucessos"})
-            df_tmp["Mes"] = mes
-            partes_suc.append(df_tmp[["Mes", "Sucessos"]])
+            partes_suc.append(
+                pd.Series({mes: _ler_sucessos(f, mes)}, name="Sucessos", dtype="int64")
+            )
 
-    series_suc = [p.groupby("Mes")["Sucessos"].sum() for p in partes_suc] + sucessos_rpa
+    series_suc = partes_suc + sucessos_rpa
     if not series_suc:
         raise FileNotFoundError("Nenhum dado de sucesso encontrado para a jornada")
     sucessos_mes = (
@@ -635,14 +708,14 @@ def categorizar(df, mes, hoje=None):
 
     _fase = df_mes["DFT_Phase"].fillna("").str.strip()
 
-    # Legado em aberto: nas jornadas de extração vem da fase "Cancelado" do
-    # Octane; no Base Residencial os defeitos não têm essa fase, e a marca é
-    # feita na leitura a partir da Classificação Original. Ela é exclusiva dessa
-    # jornada de propósito — "Cancelado" também aparece no SubStatus do Prospect,
-    # onde a regra não vale.
-    _legado = _tem_defeito & _fase.isin(FASES_LEGADO)
+    # Legado em aberto é exclusivo do Base Residencial, marcado na leitura a
+    # partir da Classificação Original — não vem de fase do Octane. A marca sai
+    # de lá, e não do valor da coluna aqui, porque "Cancelado" também aparece no
+    # SubStatus do Prospect, onde a regra não vale.
     if "LegadoAberto" in df_mes.columns:
-        _legado = _legado | df_mes["LegadoAberto"].fillna(False).astype(bool)
+        _legado = df_mes["LegadoAberto"].fillna(False).astype(bool)
+    else:
+        _legado = pd.Series(False, index=df_mes.index)
 
     cats = {
         "Em Tratamento/Avaliação pela Squad": df_mes[
