@@ -2,6 +2,12 @@
 # data-baseweb internos, que mudam entre versões (no 1.61 os seletores e as abas
 # deixaram de usar BaseWeb e o tema quebra). Ao subir, revalide o visual.
 streamlit==1.58.0
+# O servidor do streamlit 1.58 (uvicorn/starlette) depende de detalhes internos
+# do GZip do starlette: com o 1.10 ele manda o corpo de fontes e imagens
+# sem o cabeçalho ("Expected ASGI message 'http.response.start'"), e no
+# Streamlit Cloud, que instala o mais novo, o app quebra. Fica na versão local.
+starlette==1.3.1
+uvicorn==0.49.0
 pandas>=2.0,<2.3
 numpy<2.2
 matplotlib>=3.7,<3.11
