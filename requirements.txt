@@ -7,3 +7,5 @@ numpy<2.2
 matplotlib>=3.7,<3.11
 openpyxl>=3.1
 python-pptx>=1.0
+# Só para a pasta de extrações no Google Drive (drive_sync.py).
+google-auth>=2.20

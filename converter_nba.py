@@ -9,19 +9,21 @@ segundos. Cada planilha vira dois arquivos, um por aba:
     jun26.xlsx  ->  jun26__analitico.csv
                     jun26__defeitos.csv
 
-O fallout_core prefere os CSVs quando existem e continua lendo direto qualquer
-XLSX ainda não convertido, então dá para largar um arquivo novo na pasta e rodar
-este script depois.
+O app já faz isso sozinho: ao ler um XLSX do NBA, o fallout_core grava o par ao
+lado dele e das vezes seguintes lê os CSVs. Este script serve para pagar essa
+conversão antes, em vez de na primeira abertura do app. As regras do par são as
+do fallout_core (`converter_nba`), inclusive a data de modificação herdada do
+XLSX; aqui, diferente do app, são convertidas todas as planilhas da pasta.
 
-Uso:  python converter_nba.py            (converte extracoes/NBA)
+Uma planilha já convertida é pulada.
+
+Uso:  python converter_nba.py              (converte extracoes/NBA)
       python converter_nba.py <pasta>
+      python converter_nba.py --forcar     (refaz mesmo as já convertidas)
 """
-import glob
 import os
 import sys
 import time
-
-import pandas as pd
 
 for _s in (sys.stdout, sys.stderr):
     try:
@@ -32,36 +34,36 @@ for _s in (sys.stdout, sys.stderr):
 import fallout_core as fc
 
 
-def converter(pasta):
-    arquivos = sorted(glob.glob(os.path.join(pasta, "*.xlsx")))
+def converter(pasta, forcar=False):
+    arquivos = fc._arquivos(pasta, "*.xlsx")
     if not arquivos:
         print(f"Nenhum XLSX em {pasta}")
         return []
 
     gerados = []
     for arq in arquivos:
-        base = os.path.splitext(arq)[0]
         nome = os.path.basename(arq)
+        destinos = fc._espelhos_nba(arq)
+        if not forcar and fc._espelho_em_dia(arq, *destinos):
+            print(f"· {nome}: já convertido")
+            continue
         print(f"→ {nome}")
         t = time.time()
-        for aba, sufixo in ((fc.NBA_ABA_ANALITICO, fc.NBA_SUF_ANALITICO),
-                            (fc.NBA_ABA_DEFEITOS, fc.NBA_SUF_DEFEITOS)):
-            df = pd.read_excel(arq, sheet_name=aba, dtype=str)
-            destino = base + sufixo
-            # utf-8-sig para o Excel abrir os acentos direito num duplo clique.
-            df.to_csv(destino, index=False, encoding="utf-8-sig")
-            gerados.append(destino)
-            print(f"   {aba:10s} {len(df):>7,} linhas  ->  {os.path.basename(destino)}")
-        print(f"   ({time.time() - t:.1f}s)")
+        if fc.converter_nba(arq):
+            gerados += destinos
+            print(f"   -> {' + '.join(os.path.basename(d) for d in destinos)}  "
+                  f"({time.time() - t:.1f}s)")
     return gerados
 
 
 def main():
+    args = [a for a in sys.argv[1:] if a != "--forcar"]
+    forcar = "--forcar" in sys.argv[1:]
     raiz = fc.raiz_dados(os.path.dirname(os.path.abspath(__file__)))
-    pasta = sys.argv[1] if len(sys.argv) > 1 else os.path.join(raiz, "NBA")
+    pasta = args[0] if args else os.path.join(raiz, "NBA")
     print(f"pasta: {pasta}\n")
 
-    gerados = converter(pasta)
+    gerados = converter(pasta, forcar=forcar)
     if not gerados:
         return
 

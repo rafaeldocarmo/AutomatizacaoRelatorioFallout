@@ -9,6 +9,7 @@ for _s in (sys.stdout, sys.stderr):
         pass
 
 import calendar as _cal
+import datetime as _dt
 
 import pandas as pd
 from matplotlib.backends.backend_agg import FigureCanvasAgg
@@ -16,7 +17,169 @@ from matplotlib.figure import Figure
 import matplotlib.ticker as mticker
 
 import fallout_core
-from fallout_core import FASES_CORRIGIDO, FASES_MOPS, MESES_LABEL, MESES_PT
+from fallout_core import FASES_CORRIGIDO, FASES_MOPS, MESES_LABEL
+
+
+# Janela do gráfico no slide de jornada única. O histórico conta o mês
+# corrente: 5 significa os quatro anteriores mais ele.
+MESES_NO_GRAFICO = 5
+
+
+# ── Desenho das linhas do gráfico de fallout ──────────────────────────────────
+# As três versões do gráfico (slide da jornada, slide de 3 colunas e aba
+# Projeção do app) chamam estas duas funções, para as regras de desenho saírem
+# iguais nas três. `xs` pode ser rótulo de mês (eixo categórico) ou posição
+# numérica (o slide de 3 colunas desenha por índice).
+
+# Os rótulos de % ficam logo acima do ponto, e a linha que sobe ou desce dali
+# passava por cima do número ("12,21%" riscado no Cross Sell). O fundo branco,
+# à frente das linhas, deixa o número legível sem mudar a posição dele.
+# Projeção sem o Legado Aberto (Base Residencial). Bem mais escura que o verde
+# da projeção (#2E7D32): com #1B5E20 as duas linhas se confundiam no slide.
+COR_VERDE_ESCURO = "#0B3D17"
+
+ROTULO_SOBRE_LINHA = dict(
+    bbox=dict(boxstyle="round,pad=0.12", fc="white", ec="none", alpha=0.85),
+    zorder=6,
+)
+
+
+def desenhar_real(ax, xs, ys, linewidth=1.5, markersize=4, zorder=3, fechado=False):
+    """
+    Fallout realizado: contínuo até o mês passado e pontilhado do mês passado
+    para o atual. O mês do relatório ainda está correndo e o número dele muda
+    até fechar — o pontilhado é o aviso de que aquele último trecho não é
+    definitivo.
+
+    `fechado` (o `mes_fechado` do relatório) é o slide de fechamento: o corte
+    chegou ao último dia do mês, o número dele não muda mais e a linha é
+    contínua até o fim.
+    """
+    xs, ys = list(xs), list(ys)
+    comum = dict(color="black", linewidth=linewidth, marker="o",
+                 markersize=markersize, zorder=zorder)
+    if len(xs) >= 2 and not fechado:
+        ax.plot(xs[:-1], ys[:-1], label="% Falha Real", **comum)
+        ax.plot(xs[-2:], ys[-2:], linestyle=":", label="Mês em andamento", **comum)
+    elif xs:
+        ax.plot(xs, ys, label="% Falha Real", **comum)
+
+
+def desenhar_verde(ax, xs_hist, plan_hist, xs_proj, vals_proj,
+                   linewidth=1.5, markersize=4, zorder=2):
+    """
+    Uma linha verde só: o Planejado nos meses que já passaram e a projeção dali
+    em diante, como continuação dele.
+
+    A emenda pode dar salto — o Planejado é meta digitada, e a projeção sai do
+    fallout realizado. No Cross Sell de set/26 a linha subia de 2,28% para
+    16,20% na passagem para out/26. A escolha de uma linha contínua foi
+    deliberada: o verde é "para onde vamos", e o salto mostra a distância entre
+    o que foi prometido e o que a correção dos defeitos de fato entrega.
+
+    `xs_proj`/`vals_proj` trazem o ponto de partida (o mês do relatório) na
+    primeira posição, que aqui é descartado: nesse mês quem vale é o Planejado.
+    """
+    xs = list(xs_hist) + list(xs_proj)[1:]
+    ys = list(plan_hist) + list(vals_proj)[1:]
+    if not any(v == v for v in ys):             # nem meta nem projeção
+        return
+    ax.plot(xs, ys, color=fallout_core.COR_VERDE, linewidth=linewidth,
+            marker="o", markersize=markersize, zorder=zorder,
+            label="Planejado / Projeção")
+
+
+def desenhar_sem_legado(ax, xs_hist, plan_hist, xs_proj, vals_proj,
+                        fontsize=7, linewidth=1.5, markersize=4, zorder=2):
+    """
+    A linha verde-escura do Base Residencial, "Projeção s/ Legado Aberto" —
+    desenhada pelo slide da jornada e pela aba Projeção do app.
+
+    Como a verde, é uma linha só: o histórico dela (a coluna PlanejadoSemLegado
+    do histórico, `plan_hist`) nos meses passados e, do mês do relatório em
+    diante, a projeção sem o Legado Aberto (`vals_proj`, com o ponto de
+    partida na primeira posição) — no mês do relatório vale o digitado, se
+    houver. Os rótulos ficam embaixo dos pontos, para não encostar nos da
+    projeção, que ficam em cima. Sem `vals_proj` (as outras jornadas), nada.
+    """
+    if not vals_proj:
+        return
+    hist = list(plan_hist) if plan_hist else [float("nan")] * len(xs_hist)
+    if hist[-1] != hist[-1]:
+        hist[-1] = vals_proj[0]
+    ax.plot(list(xs_hist) + list(xs_proj)[1:], hist + list(vals_proj)[1:],
+            color=COR_VERDE_ESCURO, linewidth=linewidth, marker="o",
+            markersize=markersize, zorder=zorder, label="Projeção s/ Legado Aberto")
+    for x, v in zip(xs_proj, [hist[-1]] + list(vals_proj)[1:]):
+        ax.annotate(f"{v:.2f}%".replace(".", ","), xy=(x, v), xytext=(0, -11),
+                    textcoords="offset points", ha="center", va="top",
+                    fontsize=fontsize, color=COR_VERDE_ESCURO, **ROTULO_SOBRE_LINHA)
+
+
+def tabela_ofensores(df, meses, hoje):
+    """
+    Pedidos em aberto de cada defeito, um mês por coluna (`meses`): a tabela de
+    ofensores do slide (o `pivot2`), sem o filtro e a ordem que o relatório
+    aplica depois.
+
+    Função à parte para o Top Ofensores contar cada jornada nos meses da visão:
+    com o Base + Cross Sell já em out/26 (set/26 fechado no histórico) e o Base
+    Móvel ainda em set/26, o `pivot2` da jornada não tinha outubro, e o slide
+    saía com 0,00% em todo defeito.
+    """
+    hoje = fallout_core.hoje_utc(hoje)
+    ms = pd.to_datetime(df["DFT_BugfixMilestone"], utc=True, errors="coerce")
+    fechado = (
+        df["DFT_Phase"].fillna("").str.strip().isin(FASES_CORRIGIDO) &
+        df["DFT_BugfixMilestone"].notna() &
+        (ms <= hoje)
+    )
+    # `TemDefeito` no lugar do teste pelo número: jornadas com catálogo próprio
+    # identificam o defeito por rótulo (BRJ-218, "Paliativo RPA - 6") e ficariam
+    # de fora da tabela se o filtro exigisse um número.
+    # O Legado Aberto e a Funcionalidade idêntica ao legado, do Base
+    # Residencial, também saem: o pedido não está em tratamento, mesmo com
+    # defeito associado (ver fallout_core.CAT_ERRO_LEGADO). E o defeito
+    # Cancelado ou Rejeitado, como no Top Ofensores: ninguém está tratando, e
+    # o pedido está em avaliação por MOPs.
+    fora = df["DFT_Phase"].fillna("").str.strip().isin(FASES_MOPS)
+    for marca in ("LegadoAberto", "ErroLegado"):
+        if marca in df.columns:
+            fora |= df[marca].fillna(False).astype(bool)
+    em_aberto = df[df["Mes"].isin(meses) & df["TemDefeito"] & ~fechado & ~fora]
+
+    idx = ["DefectKey", "DFT_Name", "DFT_Phase", "DFT_BugfixMilestone", "DFT_Type", "DFT_Team"]
+    tabela = (
+        em_aberto.groupby(idx + ["Mes"], dropna=False)
+        .size()
+        .reset_index(name="n")
+        .set_index(idx + ["Mes"])["n"]
+        .unstack("Mes", fill_value=0)
+        .reset_index()
+    )
+    for m in meses:
+        if m not in tabela.columns:
+            tabela[m] = 0
+    return tabela
+
+
+def _em_ordem_decrescente(itens, nivel=0):
+    """
+    A Distribuição da maior categoria para a menor, em todos os slides. Os
+    subgrupos (`subitem` > 0, o nível, logo abaixo do item-mãe na lista) andam
+    junto com ele e também ficam do maior para o menor entre si, em cada nível
+    — US e DFT sob o Em Tratamento, e o c/ data e s/ data sob cada um. No
+    empate vale a ordem da lista.
+    """
+    blocos = []                                 # (item, [itens abaixo dele])
+    for item in itens:
+        if int(item[2]) > nivel and blocos:
+            blocos[-1][1].append(item)
+        else:
+            blocos.append((item, []))
+    blocos.sort(key=lambda bloco: -bloco[0][1])
+    return [linha for item, abaixo in blocos
+            for linha in [item] + _em_ordem_decrescente(abaixo, nivel + 1)]
 
 
 def gerar_relatorio(base_dir, jornada):
@@ -29,13 +192,46 @@ def gerar_relatorio(base_dir, jornada):
     não o estado global do pyplot) — pode ser chamada com segurança a partir
     de múltiplas sessões/threads simultâneas do app Streamlit.
 
-    Retorna um dict com os dados/figuras consumidos por gerar_pptx.py e
-    gerar_slide3col.py, além de tudo usado para montar o PNG do dashboard.
+    Retorna um dict com os dados consumidos por gerar_pptx.py e
+    gerar_slide3col.py, mais a figura `fig` — o dashboard que vira PNG/slide.
+
+    É `calcular_relatorio` seguido de `desenhar_dashboard`. Quem só precisa dos
+    números (o app, o Excel de ofensores, as colunas do slide de 3 colunas) chama
+    `calcular_relatorio` direto: a figura tem milhares de retângulos e custava
+    mais de meio segundo por jornada para ninguém usar.
+    """
+    ns = calcular_relatorio(base_dir, jornada)
+    return desenhar_dashboard(ns, base_dir, jornada)
+
+
+def calcular_relatorio(base_dir, jornada, base=None, hoje=None):
+    """
+    Os números do relatório de uma jornada, sem a figura: o mesmo dict de
+    `gerar_relatorio` menos `fig` e `ax_chart`.
+
+    `base` é o (df, resumo) de `fallout_core.carregar_base` quando quem chama já
+    o tem — o app guarda os dois em cache e não precisa ler a base de novo.
+
+    `hoje` é a data de referência das regras (ver `fallout_core.hoje_utc`);
+    sem ela, é a data atual. A fotografia de uma extração antiga passa o dia
+    daquela extração: a regra dos 15 dias e a entrega que já passou dependem
+    dele, e com a data de hoje as categorias sairiam como estariam agora.
+
+    Cada bloco aqui calcula algo que sai no dict, e a figura sai dele em
+    `desenhar_dashboard`. Se um dia voltar a existir tabela/gráfico que não
+    aparece em nenhum dos dois, ele é trabalho jogado fora: já houve cinco
+    figuras assim, todas removidas.
     """
     print(f"Jornada: {jornada}")
 
-    # ── 1-5. Leitura das bases (falhas + sucessos + Octane) e join ─────────────
-    df, df_octane, resumo, jornadas_combo = fallout_core.carregar_base(base_dir, jornada)
+    # ── 1. Leitura das bases (falhas + sucessos + Octane) e join ───────────────
+    # O Octane já vem embutido no `df` pelo join; a planilha crua não é usada aqui.
+    if base is None:
+        df, _df_octane, resumo, jornadas_combo = fallout_core.carregar_base(base_dir, jornada,
+                                                                             hoje=hoje)
+    else:
+        df, resumo = base
+        jornadas_combo = fallout_core.resolver_jornadas(jornada, base_dir)
     print(f"  Pastas: {', '.join(jornadas_combo)}")
     print(f"Falhas carregadas: {len(df):,} linhas")
 
@@ -46,103 +242,28 @@ def gerar_relatorio(base_dir, jornada):
     print(f"Com match no Octane         : {com_octane:,} ({com_octane/total:.1%})")
     print(f"Sem match no Octane         : {sem_octane:,} ({sem_octane/total:.1%})")
 
-    # ── 6. Gráfico: % de falha por mês (não exposto ao dashboard final) ────────
-    _fig6 = Figure(figsize=(10, 5))
-    FigureCanvasAgg(_fig6)
-    _ax6 = _fig6.add_subplot(111)
-    _ax6.plot(resumo.index.map(MESES_PT), resumo["Pct"],
-              color="black", linewidth=2, marker="o", markersize=6, label="% Falha")
-    _ax6.axhline(y=1, color="#1565C0", linewidth=1.5, linestyle="--", label="Meta (1%)")
-    for mes, row in resumo.iterrows():
-        _ax6.annotate(
-            f"{row['Pct']:.1f}%",
-            xy=(MESES_PT[mes], row["Pct"]),
-            xytext=(0, 10), textcoords="offset points",
-            ha="center", fontsize=9, color="black",
-        )
-    _ax6.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x:.1f}%"))
-    _ax6.set_title("Taxa de Falha por Mês", fontsize=13, fontweight="bold")
-    _ax6.legend(fontsize=9)
-    _ax6.grid(axis="y", linestyle="--", alpha=0.4)
-    _ax6.spines[["top", "right"]].set_visible(False)
-    _fig6.tight_layout()
+    # ── 2. Distribuição do fallout do mês + planejamento de redução ─────────────
+    hoje = fallout_core.hoje_utc(hoje)
+    _agora_brt = hoje.tz_convert("America/Sao_Paulo")
+    # O mais recente com dados (ver fallout_core.mes_do_relatorio); sem nenhum,
+    # o do calendário. A mesma regra decide o mês em que o app abre.
+    mes_atual = fallout_core.mes_do_relatorio(df, resumo)
+    if mes_atual is None:
+        mes_atual = fallout_core.chave_mes(_agora_brt.year, _agora_brt.month)
 
-    # ── 7. Tabela: Volume de Pedidos por mês (não exposta ao dashboard final) ──
-    meses_disponiveis = sorted(resumo.index.tolist())
-    col_labels = [MESES_LABEL[m] for m in meses_disponiveis]
-
-    row_sucessos = [f"{int(resumo.loc[m, 'Sucessos']):,}".replace(",", ".") for m in meses_disponiveis]
-    row_falhas = [f"{int(resumo.loc[m, 'Falhas']):,}".replace(",", ".") for m in meses_disponiveis]
-    row_fallout = [f"{resumo.loc[m, 'Pct']:.2f}%".replace(".", ",") for m in meses_disponiveis]
-
-    n_cols = len(meses_disponiveis)
-    fig_w = max(6, 1.5 * n_cols + 2)
-
-    COR_HEADER = "#8B0000"
-    COR_BRANCO = "#FFFFFF"
-    COR_CINZA = "#F2F2F2"
-    COR_TEXTO = "#222222"
-
-    n_rows = 3
-    n_tcols = n_cols + 1
-    cell_h = 0.28
-    header_h = 0.22
-    label_h = 0.22
-    total_h = header_h + label_h + n_rows * cell_h + 0.05
-
-    _fig7 = Figure(figsize=(fig_w, total_h + 0.3))
-    FigureCanvasAgg(_fig7)
-    _ax7 = _fig7.add_axes([0, 0, 1, 1])
-    _ax7.set_xlim(0, n_tcols)
-    _ax7.set_ylim(0, total_h)
-    _ax7.set_axis_off()
-
-    y_top = total_h
-    col_w = [2.2] + [1.0] * n_cols
-    x_pos = [sum(col_w[:i]) for i in range(n_tcols + 1)]
-    total_w = x_pos[-1]
-    scale = n_tcols / total_w
-    x_pos = [x * scale for x in x_pos]
-    col_w = [w * scale for w in col_w]
-
-    def draw_cell(ax, x, y, w, h, text, bg, fg="#222222", bold=False, fontsize=8, align="center"):
-        ax.add_patch(_rect(x, y - h, w, h, facecolor=bg, edgecolor="white", linewidth=0.5))
-        weight = "bold" if bold else "normal"
-        ha = "left" if align == "left" else "center"
-        xtext = x + 0.08 if align == "left" else x + w / 2
-        ax.text(xtext, y - h / 2, text, ha=ha, va="center",
-                fontsize=fontsize, color=fg, fontweight=weight)
-
-    y = y_top
-    draw_cell(_ax7, x_pos[0], y, col_w[0], header_h, "", COR_HEADER, COR_BRANCO, bold=True, fontsize=9)
-    draw_cell(_ax7, x_pos[1], y, sum(col_w[1:]), header_h, "Volume de Pedidos",
-              COR_HEADER, COR_BRANCO, bold=True, fontsize=9)
-
-    y -= header_h
-    draw_cell(_ax7, x_pos[0], y, col_w[0], label_h, "", COR_HEADER, COR_BRANCO, fontsize=8)
-    for i, label in enumerate(col_labels):
-        draw_cell(_ax7, x_pos[i + 1], y, col_w[i + 1], label_h, label,
-                  COR_HEADER, COR_BRANCO, bold=True, fontsize=8)
-
-    for r_idx, (label, valores) in enumerate([
-        ("Vendas com Sucesso", row_sucessos),
-        ("Falha (Análise Técnica)", row_falhas),
-        ("Fallout Rate", row_fallout),
-    ]):
-        y -= cell_h
-        bg = COR_BRANCO if r_idx % 2 == 0 else COR_CINZA
-        draw_cell(_ax7, x_pos[0], y, col_w[0], cell_h, label, bg, COR_TEXTO, fontsize=8, align="left")
-        for i, val in enumerate(valores):
-            draw_cell(_ax7, x_pos[i + 1], y, col_w[i + 1], cell_h, val, bg, COR_TEXTO, fontsize=8)
-
-    # ── 8. Distribuição do Fallout – mês atual ──────────────────────────────────
-    hoje = pd.Timestamp.now(tz="UTC").normalize()
-    _meses_com_dados = df["CreatedDate"].dt.tz_convert("America/Sao_Paulo").dt.month.value_counts()
-    _meses_com_dados = _meses_com_dados[_meses_com_dados >= 10]  # ignora meses com < 10 registros
-    mes_atual = int(_meses_com_dados.index.max()) if len(_meses_com_dados) else hoje.tz_convert("America/Sao_Paulo").month
+    # Mês fechado: o corte chegou ao último dia do mês do relatório ou já passou
+    # dele. A linha dele é contínua (ver `desenhar_real`).
+    _corte = fallout_core.data_corte(base_dir, hoje)
+    _dia_seguinte = _corte + _dt.timedelta(days=1) if _corte is not None else None
+    mes_fechado = bool(
+        _dia_seguinte is not None
+        and fallout_core.chave_mes(_dia_seguinte.year, _dia_seguinte.month) > mes_atual
+    )
 
     df_mes, cats, _total_cat = fallout_core.categorizar(df, mes_atual, hoje=hoje)
-    total_mes = resumo.loc[mes_atual, "Total"]
+    # O denominador das categorias: num mês fechado digitado só com a taxa, o
+    # total da extração (ver fallout_core.total_do_mes).
+    total_mes = fallout_core.total_do_mes(resumo, mes_atual)
     fallout_pct = resumo.loc[mes_atual, "Pct"]
 
     def pct(n):
@@ -154,9 +275,16 @@ def gerar_relatorio(base_dir, jornada):
     falta_assoc = cats["Falta Associar ao Defeito/US"]
     tratado = cats["Tratado - Em avaliação de eficácia"]
     mops = cats["Em Avaliação por MOPs"]
-    legado = cats["Legado Aberto"]
+    bsim = cats[fallout_core.CAT_BSIM]
+    legado = cats[fallout_core.CAT_LEGADO]
+    _sub_legado = fallout_core.subgrupo_legado(legado)
+    legado_manual = legado[_sub_legado == fallout_core.SUB_LEGADO_MANUAL]
+    legado_funcionalidade = legado[_sub_legado == fallout_core.SUB_LEGADO_FUNCIONALIDADE]
     outros_times = cats["Em avaliação - Outros times"]
     erro_processo = cats["Falha no Processo Usuário"]
+    incidente = cats[fallout_core.CAT_INCIDENTE]
+    script_rpa = cats[fallout_core.CAT_SCRIPT_RPA]
+    agendamento = cats[fallout_core.CAT_AGENDAMENTO]
 
     # ── Diagnóstico DFT específico ───────────────────────────────────────────────
     _DFT_DEBUG = 232288
@@ -177,17 +305,24 @@ def gerar_relatorio(base_dir, jornada):
     else:
         print(f"\n[DEBUG DFT {_DFT_DEBUG}] NÃO encontrado em nenhuma linha do df")
 
-    planejado = em_trat[em_trat["DFT_BugfixMilestone"].notna()]
-    us_sem_data = em_trat[em_trat["DFT_BugfixMilestone"].isna() & (em_trat["DFT_Type"].fillna("").str.strip() == "User Story")]
-    dft_sem_data = em_trat[em_trat["DFT_BugfixMilestone"].isna() & (em_trat["DFT_Type"].fillna("").str.strip() != "User Story")]
+    _subgrupo = fallout_core.subgrupo_tratamento(em_trat)
 
     # Planejamento de Redução: DFTs com milestone futuro (pro-rate por dia de entrega)
     _ms_future = pd.to_datetime(em_trat["DFT_BugfixMilestone"], utc=True, errors="coerce")
     plan_futuro = em_trat[_ms_future > hoje].copy()
-    plan_futuro["MilestoneDate"] = _ms_future[plan_futuro.index].dt.tz_convert("America/Sao_Paulo").dt.normalize()
+    # A data de entrega é de calendário (ver fallout_core.dia_local). Passada
+    # para UTC e de volta a Brasília, a data sem fuso do export do Octane de
+    # 08/10 (33 mil linhas, histórias e defeitos juntos) caía às 21h da véspera,
+    # e todo o Planejamento Redução saía um dia antes: 16/10 no lugar de 17/10.
+    plan_futuro["MilestoneDate"] = fallout_core.dia_local(
+        plan_futuro["DFT_BugfixMilestone"]).dt.tz_localize("America/Sao_Paulo")
 
+    # Agrupa por DefectKey, não por DefectNumber__c: as jornadas com catálogo
+    # próprio identificam o defeito por rótulo (BRJ-218 no Base Residencial,
+    # "Desenvolvimento RPA-9" no PME) e ficam todas com DefectNumber__c = -1.
+    # Pelo número, esses defeitos colapsavam numa linha só, rotulada "DFT-1".
     dft_counts = (
-        plan_futuro.groupby(["MilestoneDate", "DefectNumber__c"])
+        plan_futuro.groupby(["MilestoneDate", "DefectKey"])
         .size().reset_index(name="n")
     )
     dft_counts["Pct_bruta"] = dft_counts["n"] / total_mes * 100
@@ -207,10 +342,18 @@ def gerar_relatorio(base_dir, jornada):
     dft_counts["Pct_mes"] = dft_counts["Pct_bruta"] * dft_counts["ProRate"]
     dft_counts["Pct_plena"] = dft_counts["Pct_bruta"]
 
+    def _rotulo_defeito(chave):
+        """DFT123456 quando a chave é um número; o rótulo como veio quando não é."""
+        try:
+            return f"DFT{int(float(chave))}"
+        except (TypeError, ValueError):
+            return str(chave)
+
     reducao = (
         dft_counts.groupby("MilestoneDate")
         .agg(
-            DFTs=("DefectNumber__c", lambda x: "\n".join(f"DFT{int(v)}" for v in sorted(x.unique()))),
+            DFTs=("DefectKey", lambda x: "\n".join(
+                _rotulo_defeito(v) for v in sorted(x.unique(), key=str))),
             n=("n", "sum"),
             Pct_mes=("Pct_mes", "sum"),
             Pct_plena=("Pct_plena", "sum"),
@@ -221,221 +364,38 @@ def gerar_relatorio(base_dir, jornada):
     reducao["Pct"] = reducao["Pct_plena"]
 
     soma = (len(em_trat) + len(resolvido) + len(pontual) + len(falta_assoc)
-            + len(tratado) + len(mops) + len(legado) + len(outros_times) + len(erro_processo))
+            + len(tratado) + len(mops) + len(bsim) + len(legado)
+            + len(outros_times) + len(erro_processo) + len(incidente)
+            + len(script_rpa) + len(agendamento))
     print(f"\nDistribuição Fallout {MESES_LABEL[mes_atual]} ({fallout_pct:.2f}%)")
-    print(f"  Em Tratamento          {pct(len(em_trat)):.2f}%  (Planej:{pct(len(planejado)):.2f}% | US s/data:{pct(len(us_sem_data)):.2f}% | DFT s/data:{pct(len(dft_sem_data)):.2f}%)")
+    print(f"  Em Tratamento          {pct(len(em_trat)):.2f}%  ("
+          + " | ".join(f"{s}:{pct((_subgrupo == s).sum()):.2f}%"
+                       for subs in fallout_core.SUBGRUPOS_TRATAMENTO.values() for s in subs)
+          + ")")
     print(f"  Resolvido              {pct(len(resolvido)):.2f}%")
     print(f"  Falha Pontual          {pct(len(pontual)):.2f}%")
     print(f"  Falta associar         {pct(len(falta_assoc)):.2f}%")
     print(f"  Tratado - eficácia     {pct(len(tratado)):.2f}%")
     print(f"  Em Avaliação MOPs      {pct(len(mops)):.2f}%")
-    print(f"  Legado Aberto          {pct(len(legado)):.2f}%")
+    print(f"  BSIM                   {pct(len(bsim)):.2f}%")
+    print(f"  Legado Aberto          {pct(len(legado)):.2f}%  (Manual:{pct(len(legado_manual)):.2f}% | "
+          f"Func. idêntica:{pct(len(legado_funcionalidade)):.2f}%)")
     print(f"  Outros times           {pct(len(outros_times)):.2f}%")
     print(f"  Falha Processo Usuário {pct(len(erro_processo)):.2f}%")
+    print(f"  Incidente              {pct(len(incidente)):.2f}%")
     print(f"  Total categorizado: {soma}/{len(df_mes)}")
 
-    # ── Tabela visual de distribuição (não exposta ao dashboard final) ─────────
-    COR_HDR_D = "#C0392B"
-    COR_W = "#FFFFFF"
-    COR_G = "#F2F2F2"
-    COR_FG = "#333333"
-
-    dist_rows = [
-        (f"Distribuição Fallout ({fallout_pct:.2f}%)", "", 0, True),
-        ("Em Tratamento/Avaliação pela Squad", f"{pct(len(em_trat)):.2f}%", 0, False),
-        ("Planejado", f"{pct(len(planejado)):.2f}%", 1, False),
-        ("US s/ data", f"{pct(len(us_sem_data)):.2f}%", 2, False),
-        ("DFT s/ data", f"{pct(len(dft_sem_data)):.2f}%", 2, False),
-        ("Resolvido", f"{pct(len(resolvido)):.2f}%", 0, False),
-        ("Falha Pontual", f"{pct(len(pontual)):.2f}%", 0, False),
-        ("Falta associar problema ao Defeito/US", f"{pct(len(falta_assoc)):.2f}%", 0, False),
-        ("Tratado - Em avaliação de eficácia", f"{pct(len(tratado)):.2f}%", 0, False),
-        ("Em Avaliação por MOPs", f"{pct(len(mops)):.2f}%", 0, False),
-        ("Legado Aberto", f"{pct(len(legado)):.2f}%", 0, False),
-        ("Em avaliação - Outros times", f"{pct(len(outros_times)):.2f}%", 0, False),
-        ("Falha no Processo Usuário", f"{pct(len(erro_processo)):.2f}%", 0, False),
-        (f"Planejamento Redução ({reducao['Pct_plena'].sum():.2f}% pleno)", "", 0, True),
-    ]
-    for _, r in reducao.iterrows():
-        dist_rows.append((r["MilestoneDate"].strftime("%d/%m/%Y"), "", 1, False))
-        for dft_id in r["DFTs"].split("\n"):
-            dist_rows.append((dft_id.strip(), f"{r['Pct'] / (r['DFTs'].count(chr(10)) + 1):.2f}%", 2, False))
-
-    cell_h_d = 0.30
-    fig_hd = len(dist_rows) * cell_h_d + 0.2
-    _fig8 = Figure(figsize=(7, fig_hd + 0.3))
-    FigureCanvasAgg(_fig8)
-    ax_d = _fig8.add_axes([0, 0, 1, 1])
-    ax_d.set_xlim(0, 7); ax_d.set_ylim(0, fig_hd + 0.3); ax_d.set_axis_off()
-
-    LABEL_W = 5.5; VAL_W = 1.5; INDENT = 0.35
-    yd = fig_hd + 0.15
-    toggle = False
-    for label, valor, indent, is_header in dist_rows:
-        yd -= cell_h_d
-        if is_header:
-            bg = COR_HDR_D; fg = "#FFFFFF"; bold = True; fs = 8.5
-        else:
-            bg = COR_W if not toggle else COR_G; fg = COR_FG; bold = False; fs = 8
-            toggle = not toggle
-        ax_d.add_patch(_rect(0, yd, LABEL_W + VAL_W, cell_h_d, facecolor=bg, edgecolor="#DDDDDD", linewidth=0.4))
-        ax_d.text(0.12 + indent * INDENT, yd + cell_h_d / 2, label,
-                  ha="left", va="center", fontsize=fs, color=fg,
-                  fontweight="bold" if bold else "normal")
-        if valor:
-            ax_d.text(LABEL_W + VAL_W - 0.12, yd + cell_h_d / 2, valor,
-                      ha="right", va="center", fontsize=fs, color=fg)
-
-    # ── 9. Tabela detalhada por DFT/US (mês atual + mês anterior, não exposta) ──
-    mes_ant = mes_atual - 1 if mes_atual > 1 else 12
-    meses_detalhe = [mes_ant, mes_atual]
-    labels_detalhe = [MESES_LABEL[m][:3].capitalize() for m in meses_detalhe]
-
-    df_dois_meses = df[df["Mes"].isin(meses_detalhe)].copy()
-    _ms_dois = pd.to_datetime(df_dois_meses["DFT_BugfixMilestone"], utc=True, errors="coerce")
-    _resolvido = (
-        df_dois_meses["DFT_Phase"].fillna("").str.strip().isin(FASES_CORRIGIDO) &
-        df_dois_meses["DFT_BugfixMilestone"].notna() &
-        (_ms_dois <= hoje)
-    )
-    df_dois_meses = df_dois_meses[
-        df_dois_meses["DefectNumber__c"].notna() &
-        (df_dois_meses["DefectNumber__c"] != 999999) &
-        (df_dois_meses["DefectNumber__c"] != -1) &
-        ~_resolvido
-    ]
-
-    totais = {m: resumo.loc[m, "Total"] for m in meses_detalhe if m in resumo.index}
-    pivot = (
-        df_dois_meses.groupby(["DefectNumber__c", df_dois_meses["Mes"]])
-        .size()
-        .unstack(fill_value=0)
-        .rename(columns={m: MESES_LABEL[m][:3].capitalize() for m in meses_detalhe})
-    )
-    for col, m in zip(labels_detalhe, meses_detalhe):
-        if col not in pivot.columns:
-            pivot[col] = 0
-        pivot[f"pct_{col}"] = pivot[col] / totais.get(m, 1) * 100
-
-    col_atual = labels_detalhe[-1]
-    pivot = (
-        pivot[pivot[col_atual] > 0]
-        .sort_values(f"pct_{col_atual}", ascending=False)
-        .reset_index()
-    )
-
-    octane_lookup = df_octane.set_index("DefectNumber__c")[
-        ["DFT_Name", "DFT_Team", "DFT_Phase", "DFT_BugfixMilestone", "DFT_Type"]
-    ]
-    pivot = pivot.join(octane_lookup, on="DefectNumber__c", how="left")
-
-    pivot["DataProd"] = pd.to_datetime(pivot["DFT_BugfixMilestone"], errors="coerce").dt.strftime("%d/%m/%Y")
-    pivot["DataProd"] = pivot["DataProd"].fillna("")
-    pivot["Tipo"] = pivot["DFT_Type"].fillna("").str.strip()
-    pivot["Tipo"] = pivot["Tipo"].replace({"User Story": "US", "Defect": "Defeito"})
-    pivot["ID_fmt"] = pivot["DefectNumber__c"].apply(lambda x: str(int(x)) if pd.notna(x) else "")
-
-    COLS = ["Classificação", "Agrupamento", "Tipo", "Defeito/US",
-            "Data Prod\nnão resolvidos", "Nome Defeito", "Time",
-            "Status\nDefeito/US"] + labels_detalhe
-    col_widths = [1.5, 2.8, 1.5, 1.5, 1.8, 5.5, 2.5, 2.5] + [1.0] * len(labels_detalhe)
-    total_w3 = sum(col_widths)
-
-    COR_H3 = "#2C2C2C"; COR_B3 = "#FFFFFF"; COR_C3 = "#F5F5F5"; COR_FG = "#222222"
-    cell_h3 = 0.38
-    header_h3 = 0.38
-    n_data_rows = len(pivot) + 2
-    fig_h3 = header_h3 + n_data_rows * cell_h3 + 0.2
-    fig3 = Figure(figsize=(total_w3 * 0.7, fig_h3 * 1.1))
-    FigureCanvasAgg(fig3)
-    ax3 = fig3.add_axes([0, 0, 1, 1])
-    ax3.set_xlim(0, total_w3)
-    ax3.set_ylim(0, fig_h3)
-    ax3.set_axis_off()
-
-    x_starts = [sum(col_widths[:i]) for i in range(len(col_widths) + 1)]
-
-    def cell3(ax, col_idx, y, h, text, bg, fg=COR_FG, bold=False, fs=7, align="center", span=1):
-        x = x_starts[col_idx]
-        w = sum(col_widths[col_idx:col_idx + span])
-        ax.add_patch(_rect(x, y, w, h, facecolor=bg, edgecolor="#CCCCCC", linewidth=0.3))
-        ha = "left" if align == "left" else "center"
-        xt = x + 0.08 if align == "left" else x + w / 2
-        ax.text(xt, y + h / 2, str(text), ha=ha, va="center", fontsize=fs,
-                color=fg, fontweight="bold" if bold else "normal", wrap=True,
-                multialignment=ha)
-
-    y3 = fig_h3 - header_h3
-    for ci, col in enumerate(COLS):
-        cell3(ax3, ci, y3, header_h3, col, COR_H3, fg="#FFFFFF", bold=True, fs=7)
-
-    y3 -= cell_h3
-    cell3(ax3, 0, y3, cell_h3, "Sucesso", COR_B3, bold=False, fs=7)
-    for ci in range(1, len(COLS) - len(labels_detalhe)):
-        cell3(ax3, ci, y3, cell_h3, "", COR_B3)
-    for li, col in enumerate(labels_detalhe):
-        m = meses_detalhe[li]
-        suc_pct = resumo.loc[m, "Sucessos"] / totais[m] * 100 if m in totais else 0
-        cell3(ax3, len(COLS) - len(labels_detalhe) + li, y3, cell_h3, f"{suc_pct:.2f}%", COR_B3, fs=7)
-
-    y3 -= cell_h3
-    cell3(ax3, 0, y3, cell_h3, "Falha", COR_C3, bold=False, fs=7)
-    cell3(ax3, 1, y3, cell_h3, "Em Tratamento/\nAvaliação pela Squad", COR_C3, bold=False, fs=6.5)
-    for ci in range(2, len(COLS)):
-        cell3(ax3, ci, y3, cell_h3, "", COR_C3)
-
-    for ri, row in pivot.iterrows():
-        y3 -= cell_h3
-        bg = COR_B3 if ri % 2 == 0 else COR_C3
-        cell3(ax3, 0, y3, cell_h3, "", bg)
-        cell3(ax3, 1, y3, cell_h3, "", bg)
-        cell3(ax3, 2, y3, cell_h3, row["Tipo"], bg, fs=7)
-        cell3(ax3, 3, y3, cell_h3, row["ID_fmt"], bg, fs=7)
-        cell3(ax3, 4, y3, cell_h3, row["DataProd"], bg, fs=7)
-        nome = str(row["DFT_Name"])[:80] if pd.notna(row["DFT_Name"]) else ""
-        cell3(ax3, 5, y3, cell_h3, nome, bg, fs=6, align="left")
-        cell3(ax3, 6, y3, cell_h3, str(row["DFT_Team"])[:30] if pd.notna(row["DFT_Team"]) else "", bg, fs=6.5)
-        cell3(ax3, 7, y3, cell_h3, str(row["DFT_Phase"])[:25] if pd.notna(row["DFT_Phase"]) else "", bg, fs=6.5)
-        for li, lbl in enumerate(labels_detalhe):
-            val = f"{row[f'pct_{lbl}']:.2f}%"
-            cell3(ax3, 8 + li, y3, cell_h3, val, bg, fs=7)
-
-    # ── 10. Tabela Em Tratamento – estilo com células mescladas ─────────────────
-    mes_ant2 = mes_atual - 1 if mes_atual > 1 else 12
+    # ── 3. Ofensores: defeitos/US ainda em aberto no mês (pivot2) ───────────────
+    mes_ant2 = fallout_core.mes_anterior(mes_atual)
     meses_tab = [mes_ant2, mes_atual]
     labels_tab = [MESES_LABEL[m][:3].capitalize() for m in meses_tab]
-    totais_tab = {m: resumo.loc[m, "Total"] for m in meses_tab if m in resumo.index}
+    totais_tab = {m: fallout_core.total_do_mes(resumo, m) for m in meses_tab
+                  if m in resumo.index}
 
     def pct_m(n, m):
         return n / totais_tab.get(m, 1) * 100
 
-    _ms_trat2 = pd.to_datetime(df["DFT_BugfixMilestone"], utc=True, errors="coerce")
-    _fech2 = (
-        df["DFT_Phase"].fillna("").str.strip().isin(FASES_CORRIGIDO) &
-        df["DFT_BugfixMilestone"].notna() &
-        (_ms_trat2 <= hoje)
-    )
-    # `TemDefeito` no lugar do teste pelo número: jornadas com catálogo próprio
-    # identificam o defeito por rótulo (BRJ-218, "Paliativo RPA - 6") e ficariam
-    # de fora da tabela se o filtro exigisse um número.
-    df_trat2 = df[
-        df["Mes"].isin(meses_tab) &
-        df["TemDefeito"] &
-        ~_fech2
-    ].copy()
-
-    _idx_cols = ["DefectKey", "DFT_Name", "DFT_Phase", "DFT_BugfixMilestone", "DFT_Type", "DFT_Team"]
-    pivot2 = (
-        df_trat2.groupby(_idx_cols + ["Mes"], dropna=False)
-        .size()
-        .reset_index(name="n")
-        .set_index(_idx_cols + ["Mes"])["n"]
-        .unstack("Mes", fill_value=0)
-        .reset_index()
-    )
-    for m in meses_tab:
-        if m not in pivot2.columns:
-            pivot2[m] = 0
+    pivot2 = tabela_ofensores(df, meses_tab, hoje)
 
     _dft_em_trat = set(em_trat["DefectKey"].unique())
     _dft_pivot_antes = set(pivot2["DefectKey"].unique()) if "DefectKey" in pivot2.columns else set()
@@ -478,92 +438,210 @@ def gerar_relatorio(base_dir, jornada):
     COL_NAMES = ["Classificação", "Agrupamento", "Tipo", "Defeito / US",
                  "Data Prod\nnão resolvidos", "Nome Defeito", "Time",
                  "Status\nDefeito/US"] + labels_tab
+
+    # Data de abertura de cada defeito, onde a origem traz (o catálogo do Base
+    # Residencial). Vazio nas demais jornadas, e aí o slide não ganha a coluna.
+    if "DFT_CreatedDate" in df.columns:
+        _criado = df.dropna(subset=["DFT_CreatedDate"]).drop_duplicates("DefectKey")
+        criado_em = dict(zip(_criado["DefectKey"].astype(str), _criado["DFT_CreatedDate"]))
+    else:
+        criado_em = {}
+
+    # ── 3b. Volume, distribuição e séries do gráfico ──────────────────────────
+    # Os números que o dashboard mostra. Ficam aqui, e não junto do desenho,
+    # porque o app, o Excel de ofensores e o slide de 3 colunas usam esses
+    # valores sem precisar da figura.
+    # Também até o mês do relatório: a Distribuição logo abaixo é do mes_atual,
+    # e uma coluna de volume à frente dele — com poucos dias de extração — seria
+    # lida como se fosse o mesmo mês.
+    meses_vol = [m for m in sorted(resumo.index) if m <= mes_atual][-3:]
+
+    # O terceiro campo é o nível: 0 a categoria, 1 o subgrupo, 2 o subgrupo do
+    # subgrupo (o c/ data e s/ data dentro de US e DFT).
+    _tipo = fallout_core.tipo_do_subgrupo(_subgrupo)
+    dist_items = [
+        ("Em Tratamento/Avaliação pela Squad", pct(len(em_trat)), 0, True),
+        *[item for tipo, subs in fallout_core.SUBGRUPOS_TRATAMENTO.items()
+          for item in [(tipo, pct((_tipo == tipo).sum()), 1, False)]
+          + [(s, pct((_subgrupo == s).sum()), 2, False) for s in subs]],
+        ("Resolvido", pct(len(resolvido)), False, False),
+        ("Falha Pontual", pct(len(pontual)), False, False),
+        ("Falta associar problema ao Defeito/US", pct(len(falta_assoc)), False, False),
+        ("Tratado - Em avaliação de eficácia", pct(len(tratado)), False, False),
+        ("Em Avaliação por MOPs", pct(len(mops)), False, False),
+        (fallout_core.CAT_BSIM, pct(len(bsim)), False, False),
+        # Negrito como o Em Tratamento: as duas são as categorias com subgrupos.
+        (fallout_core.CAT_LEGADO, pct(len(legado)), False, True),
+        (fallout_core.SUB_LEGADO_MANUAL, pct(len(legado_manual)), True, False),
+        (fallout_core.SUB_LEGADO_FUNCIONALIDADE, pct(len(legado_funcionalidade)), True, False),
+        ("Em avaliação - Outros times", pct(len(outros_times)), False, False),
+        ("Falha no Processo Usuário", pct(len(erro_processo)), False, False),
+        (fallout_core.CAT_SCRIPT_RPA, pct(len(script_rpa)), False, False),
+        (fallout_core.CAT_AGENDAMENTO, pct(len(agendamento)), False, False),
+        (fallout_core.CAT_INCIDENTE, pct(len(incidente)), False, False),
+    ]
+    dist_items = _em_ordem_decrescente(dist_items)
+
+    # O slide de jornada mostra uma janela curta: com o histórico digitado a
+    # série passou de 25 meses e os rótulos viravam um borrão. O arquivo segue
+    # guardando tudo — quem mostra a série inteira é o slide de 3 colunas.
+    # A série realizada termina no mês do relatório. O resumo pode ter um mês à
+    # frente dele — um mês com falhas e ainda sem sucessos, que não vira o do
+    # relatório (ver fallout_core.mes_do_relatorio): ele não é realização, e sem
+    # este corte entrava na linha preta como se fosse — e ainda era projetado em
+    # seguida, com o mesmo rótulo saindo duas vezes no eixo.
+    meses_hist = [m for m in sorted(resumo.index) if m <= mes_atual][-MESES_NO_GRAFICO:]
+    vals_hist = [resumo.loc[m, "Pct"] for m in meses_hist]
+    labels_hist = [MESES_LABEL[m] for m in meses_hist]
+
+    # "Planejado": a meta digitada no histórico. Só existe onde foi preenchida —
+    # os buracos ficam NaN e o matplotlib não desenha o trecho. Ele é desenhado
+    # mais abaixo, junto com a projeção, porque os dois formam uma linha só.
+    plan_hist = [
+        float(resumo.loc[m, "PctPlanejado"]) if "PctPlanejado" in resumo.columns
+        else float("nan")
+        for m in meses_hist
+    ]
+    # O mesmo para a linha verde-escura do Base Residencial (projeção sem o
+    # Legado Aberto): o histórico dela é a coluna PlanejadoSemLegado.
+    plan_sem_legado_hist = [
+        float(resumo.loc[m, "PctPlanejadoSemLegado"])
+        if "PctPlanejadoSemLegado" in resumo.columns else float("nan")
+        for m in meses_hist
+    ]
+
+    _ms_chave = (fallout_core.chave_de_datas(reducao["MilestoneDate"])
+                 if len(reducao) else pd.Series(dtype="int64"))
+    # O que está no número do mês corrente mas não se repete no mês que vem sai
+    # inteiro já no primeiro mês projetado. São três categorias:
+    #   "Resolvido" e "Tratado - Em avaliação de eficácia", cuja correção já
+    #   entrou em produção (milestone <= hoje);
+    #   "Incidente", que é falha pontual de um incidente já encerrado e não tem
+    #   DFT para entrar no planejamento de redução — mantê-lo projetava para
+    #   sempre uma falha que não volta.
+    # Nenhuma leva pro-rata: ele existe para quem entrega no meio do mês, e aqui
+    # não há entrega a esperar.
+    #
+    # Sem isso a projeção nascia pessimista, tratando como permanente o que já
+    # estava corrigido: no Cross Sell de ago/26 eram 5,29 pp (4,99 de Resolvido
+    # mais 0,30 de eficácia) sobre um fallout de 21,31%. O incidente é o mesmo
+    # caso — em set/26 são 2,04 pp do Cross Sell, e zero nas demais jornadas.
+    #
+    # Não há dupla contagem com `reducao`: ela sai de `em_trat`, que exclui
+    # tanto o que já está encerrado quanto o incidente. As três são disjuntas.
+    pct_nao_recorrente = pct(len(resolvido) + len(tratado) + len(incidente))
+
+    proj_months_num = [m for m in sorted(set(_ms_chave)) if m > mes_atual]
+    todos_meses_proj = []
+    # Vai até um mês depois da última entrega, para a curva mostrar o patamar em
+    # que ela fica quando tudo estiver corrigido, e sempre projeta ao menos o mês
+    # seguinte, mesmo sem entrega nem nada corrigido: a PME Móvel de out/26 não
+    # tinha nenhuma das duas coisas e o gráfico saía sem projeção.
+    limite = fallout_core.proximo_mes(
+        proj_months_num[-1] if proj_months_num else mes_atual)
+    chave = fallout_core.proximo_mes(mes_atual)
+    # Sem limite de meses: a curva segue até a última entrega planejada.
+    # Antes parava em dois meses, e as entregas mais distantes não
+    # apareciam na projeção.
+    while chave <= limite:
+        todos_meses_proj.append(chave)
+        chave = fallout_core.proximo_mes(chave)
+
+    proj_labels = [labels_hist[-1]]
+    proj_vals = [vals_hist[-1]]
+    pct_acumulada = (reducao.loc[_ms_chave == mes_atual, "Pct_plena"].sum()
+                     + pct_nao_recorrente)
+
+    # `proj_detalhe` guarda a conta de cada mês projetado, parcela a parcela, para
+    # a aba de Projeção do app mostrar de onde sai o número sem refazer a regra.
+    proj_detalhe = []
+    for m in todos_meses_proj:
+        red_mes = reducao.loc[_ms_chave == m, "Pct_mes"].sum()
+        red_plena = reducao.loc[_ms_chave == m, "Pct_plena"].sum()
+        cur_val = max(vals_hist[-1] - pct_acumulada - red_mes, 0)
+        proj_detalhe.append({
+            "mes": MESES_LABEL[m],
+            "acumulado": float(pct_acumulada),   # entregas já contadas + não recorrente
+            "entrega_mes": float(red_mes),       # entregas deste mês, pro-rata
+            "valor": float(cur_val),
+        })
+        proj_labels.append(MESES_LABEL[m])
+        proj_vals.append(cur_val)
+        pct_acumulada += red_plena
+
+    # A mesma projeção sem o Legado Aberto, só onde ele existe (o Base
+    # Residencial): a fatia dele no mês do relatório sai de todos os pontos,
+    # inclusive do de partida. Vazia nas demais jornadas.
+    pct_legado = pct(len(legado))
+    proj_sem_legado = ([max(v - pct_legado, 0) for v in proj_vals]
+                       if round(pct_legado, 2) > 0 else [])
+
+    return {
+        "df": df,
+        "resumo": resumo,
+        "MESES_LABEL": MESES_LABEL,
+        "mes_atual": mes_atual,
+        "mes_fechado": mes_fechado,
+        "hoje": hoje,
+        "fallout_pct": fallout_pct,
+        "meses_vol": meses_vol,
+        "dist_items": dist_items,
+        "reducao": reducao,
+        "COL_NAMES": COL_NAMES,
+        "criado_em": criado_em,
+        "meses_tab": meses_tab,
+        "pivot2": pivot2,
+        "fmt_id": fmt_id,
+        "fmt_milestone": fmt_milestone,
+        "pct_m": pct_m,
+        "proj_labels": proj_labels,
+        "proj_vals": proj_vals,
+        "proj_sem_legado": proj_sem_legado,
+        "plan_sem_legado_hist": plan_sem_legado_hist,
+        # Séries e parcelas do gráfico de projeção, para a aba do app desenhar o
+        # mesmo gráfico sem repetir a regra — se ela fosse recalculada lá, app e
+        # slide poderiam divergir sem ninguém perceber.
+        "labels_hist": labels_hist,
+        "vals_hist": vals_hist,
+        "plan_hist": plan_hist,
+        "pct_nao_recorrente": float(pct_nao_recorrente),
+        "proj_detalhe": proj_detalhe,
+        "total_mes": total_mes,
+        # O Planejamento de Redução defeito a defeito, antes de ser agrupado por
+        # data em `reducao`. É o que a fotografia guarda para a comparação
+        # explicar a mudança da projeção por defeito ("o DFT X foi adiado").
+        "reducao_defeitos": dft_counts,
+    }
+
+
+def desenhar_dashboard(ns, base_dir, jornada):
+    """
+    Dashboard 16x9 de uma jornada — a figura do slide dela — a partir do
+    resultado de `calcular_relatorio`. Devolve o mesmo `ns`, agora com `fig` e
+    `ax_chart`. Só desenha: todo número que aparece aqui já vem calculado.
+    """
+    resumo, mes_atual, hoje = ns["resumo"], ns["mes_atual"], ns["hoje"]
+    fallout_pct, dist_items, reducao = ns["fallout_pct"], ns["dist_items"], ns["reducao"]
+    meses_vol, meses_tab, pivot2 = ns["meses_vol"], ns["meses_tab"], ns["pivot2"]
+    COL_NAMES = ns["COL_NAMES"]
+    fmt_id, fmt_milestone, pct_m = ns["fmt_id"], ns["fmt_milestone"], ns["pct_m"]
+    labels_hist, vals_hist, plan_hist = ns["labels_hist"], ns["vals_hist"], ns["plan_hist"]
+    proj_labels, proj_vals = ns["proj_labels"], ns["proj_vals"]
+
     COL_W = [1.5, 2.8, 1.3, 1.5, 1.8, 6.2, 2.6, 2.2] + [1.3] * len(meses_tab)
-    TOTAL_W = sum(COL_W)
     X = [sum(COL_W[:i]) for i in range(len(COL_W) + 1)]
 
-    COR_HDR = "#C0392B"; COR_W2 = "#FFFFFF"; COR_G2 = "#F2F2F2"; COR_FG2 = "#222222"
+    COR_HDR = fallout_core.COR_VERMELHO
+    COR_W2 = "#FFFFFF"; COR_G2 = "#F2F2F2"; COR_FG2 = "#222222"
     CELL_H = 0.32
     HDR_H = 0.38
     n_data = 1 + 1 + len(pivot2)
     fig_h = HDR_H + n_data * CELL_H + 0.45
-    fig5 = Figure(figsize=(TOTAL_W * 0.68, fig_h))
-    FigureCanvasAgg(fig5)
-    ax5 = fig5.add_axes([0, 0, 1, 1])
-    ax5.set_xlim(0, TOTAL_W)
-    ax5.set_ylim(0, fig_h)
-    ax5.set_axis_off()
 
-    def cell5(col, y, h, text, bg, fg=COR_FG2, bold=False, fs=7, align="center", span=1, italic=False):
-        x = X[col]
-        w = sum(COL_W[col:col + span])
-        ax5.add_patch(_rect(x, y, w, h, facecolor=bg, edgecolor="#BBBBBB", linewidth=0.3))
-        ha = "left" if align == "left" else "center"
-        xt = x + 0.1 if align == "left" else x + w / 2
-        style = "italic" if italic else "normal"
-        ax5.text(xt, y + h / 2, str(text), ha=ha, va="center",
-                 fontsize=fs, color=fg, fontweight="bold" if bold else "normal",
-                 fontstyle=style, multialignment=ha, wrap=True, clip_on=True)
-
-    y5 = fig_h - HDR_H
-    for ci, col in enumerate(COL_NAMES):
-        cell5(ci, y5, HDR_H, col, COR_HDR, fg="#FFFFFF", bold=True, fs=7)
-
-    y5 -= CELL_H
-    cell5(0, y5, CELL_H, "Sucesso", COR_W2, fs=7)
-    for ci in range(1, len(COL_NAMES) - len(meses_tab)):
-        cell5(ci, y5, CELL_H, "", COR_W2)
-    for li, m in enumerate(meses_tab):
-        suc_n = resumo.loc[m, "Sucessos"] if m in resumo.index else 0
-        suc_pct = pct_m(suc_n, m)
-        cell5(len(COL_NAMES) - len(meses_tab) + li, y5, CELL_H, f"{suc_pct:.2f}%", COR_W2, fs=7)
-
-    y5 -= CELL_H
-    cell5(0, y5, CELL_H, "Falha", COR_G2, fs=7)
-    cell5(1, y5, CELL_H, "Em Tratamento/Avaliação\npela Squad", COR_G2, fs=6.5)
-    for ci in range(2, len(COL_NAMES)):
-        cell5(ci, y5, CELL_H, "", COR_G2)
-
-    has_q3 = has_q4 = False
-    pivot2_reset_5 = pivot2.reset_index(drop=True)
-    for ri in range(len(pivot2_reset_5)):
-        row = pivot2_reset_5.iloc[ri]
-        y5 -= CELL_H
-        bg = COR_W2 if ri % 2 == 0 else COR_G2
-
-        tipo = str(row["DFT_Type"]).strip() if pd.notna(row["DFT_Type"]) else ""
-        tipo_fmt = "US" if tipo == "User Story" else "Defeito"
-        id_str = fmt_id({"DefectKey": row["DefectKey"], "DFT_BugfixMilestone": row["DFT_BugfixMilestone"]})
-        ms_fmt = fmt_milestone(row["DFT_BugfixMilestone"])
-        nome = str(row["DFT_Name"])[:70] if pd.notna(row["DFT_Name"]) else ""
-        team = str(row["DFT_Team"])[:30] if pd.notna(row["DFT_Team"]) else ""
-        phase = str(row["DFT_Phase"])[:30] if pd.notna(row["DFT_Phase"]) else ""
-
-        if "*" in id_str and "**" not in id_str: has_q3 = True
-        if "**" in id_str: has_q4 = True
-
-        cell5(0, y5, CELL_H, "", bg)
-        cell5(1, y5, CELL_H, "", bg)
-        cell5(2, y5, CELL_H, tipo_fmt, bg, fs=7)
-        cell5(3, y5, CELL_H, id_str, bg, fs=7)
-        cell5(4, y5, CELL_H, ms_fmt, bg, fs=7)
-        cell5(5, y5, CELL_H, nome, bg, fs=5.5, align="left")
-        cell5(6, y5, CELL_H, team, bg, fs=6.5)
-        cell5(7, y5, CELL_H, phase, bg, fs=6.5)
-        for li, m in enumerate(meses_tab):
-            val = int(row.loc[m]) if m in pivot2_reset_5.columns else 0
-            cell5(8 + li, y5, CELL_H, f"{pct_m(val, m):.2f}%", bg, fs=7)
-
-    rodape_parts = []
-    if has_q3: rodape_parts.append("* Q3")
-    if has_q4: rodape_parts.append("** Q4")
-    rodape = "  //  ".join(rodape_parts)
-    if rodape:
-        ax5.text(0.15, y5 - 0.20, rodape, ha="left", va="top", fontsize=7, color="#444444", fontstyle="italic")
-
-    # ── 11. Visão Consolidada (dashboard) ───────────────────────────────────────
-    COR_RED = "#C0392B"; COR_W = "#FFFFFF"; COR_G = "#F0F0F0"
-    COR_BLUE = "#1565C0"; COR_GRAY = "#B0B0B0"; COR_FG = "#222222"
+    # ── 4. Dashboard consolidado — a única figura que sai daqui ─────────────────
+    COR_RED = fallout_core.COR_VERMELHO
+    COR_W = "#FFFFFF"; COR_G = "#F0F0F0"
+    COR_BLUE = "#1565C0"; COR_FG = "#222222"
 
     fig = Figure(figsize=(16, 9))
     FigureCanvasAgg(fig)
@@ -583,8 +661,7 @@ def gerar_relatorio(base_dir, jornada):
                   transform=ax_title.transAxes, ha="center", va="center",
                   fontsize=16, fontweight="bold", color="white")
 
-    # ── 11a. Bloco esquerdo: Volume + Distribuição + Planejamento ──────────────
-    meses_vol = sorted(resumo.index.tolist())[-3:] if len(resumo) >= 3 else sorted(resumo.index.tolist())
+    # ── 4a. Bloco esquerdo: Volume + Distribuição + Planejamento ──────────────
     labels_vol = [MESES_LABEL[m].capitalize() for m in meses_vol]
 
     n_planos = len(reducao)
@@ -621,9 +698,9 @@ def gerar_relatorio(base_dir, jornada):
         cellL(VOL_LBL_W + i * VOL_COL_W, y, VOL_COL_W, row_h, lbl, COR_RED, COR_W, bold=True, fs=7)
 
     vol_data = [
-        ("Vendas com Sucesso", "Sucessos", lambda v: f"{int(v):,}".replace(",", ".")),
-        ("Falha (Análise Técnica)", "Falhas", lambda v: f"{int(v):,}".replace(",", ".")),
-        ("Fallout Rate", "Pct", lambda v: f"{v:.2f}%".replace(".", ",")),
+        ("Vendas com Sucesso", "Sucessos", fallout_core.fmt_inteiro),
+        ("Falha (Análise Técnica)", "Falhas", fallout_core.fmt_inteiro),
+        ("Fallout Rate", "Pct", fallout_core.fmt_pct),
     ]
     for ri, (label, key, fmt) in enumerate(vol_data):
         y -= row_h
@@ -635,29 +712,21 @@ def gerar_relatorio(base_dir, jornada):
     y -= row_h
     cellL(0, y, left_w, row_h, f"Distribuição Fallout ({fallout_pct:.2f}%)", COR_RED, COR_W, bold=True, fs=7.5)
 
-    dist_items = [
-        ("Em Tratamento/Avaliação pela Squad", pct(len(em_trat)), False, True),
-        ("Planejado", pct(len(planejado)), True, False),
-        ("US s/ data", pct(len(us_sem_data)), True, False),
-        ("DFT s/ data", pct(len(dft_sem_data)), True, False),
-        ("Resolvido", pct(len(resolvido)), False, False),
-        ("Falha Pontual", pct(len(pontual)), False, False),
-        ("Falta associar problema ao Defeito/US", pct(len(falta_assoc)), False, False),
-        ("Tratado - Em avaliação de eficácia", pct(len(tratado)), False, False),
-        ("Em Avaliação por MOPs", pct(len(mops)), False, False),
-        ("Legado Aberto", pct(len(legado)), False, False),
-        ("Em avaliação - Outros times", pct(len(outros_times)), False, False),
-        ("Falha no Processo Usuário", pct(len(erro_processo)), False, False),
-    ]
     toggle = False
+    _tem_nivel_2 = any(int(it[2]) >= 2 for it in dist_items)
     for label, val, subitem, bold_label in dist_items:
         y -= row_h
         bg = COR_W if not toggle else COR_G
         toggle = not toggle
-        val_str = f"{val:.2f}%".replace(".", ",")
+        val_str = "" if fallout_core.so_rotulo(label, subitem) else f"{val:.2f}%".replace(".", ",")
         if subitem:
+            # Subgrupo alinhado à direita; o de primeiro nível com um recuo a
+            # mais, para o "c/ data"/"s/ data" de baixo ler como parte dele.
+            recuo = 0.15 + (0.8 if int(subitem) == 1 and _tem_nivel_2 else 0)
             ax_left.add_patch(_rect(0, y, DIST_LBL_W, row_h, facecolor=bg, edgecolor="white", linewidth=0.6))
-            ax_left.text(DIST_LBL_W - 0.15, y + row_h / 2, label, ha="right", va="center", fontsize=6.5, color=COR_FG)
+            ax_left.text(DIST_LBL_W - recuo, y + row_h / 2,
+                         fallout_core.rotulo_dist(label, subitem), ha="right", va="center",
+                         fontsize=6.5, color=COR_FG)
             cellL(DIST_LBL_W, y, DIST_VAL_W, row_h, val_str, bg, COR_FG, fs=6.5)
         else:
             cellL(0, y, DIST_LBL_W, row_h, label, bg, COR_FG, bold=bold_label, fs=6.5, align="left")
@@ -687,98 +756,37 @@ def gerar_relatorio(base_dir, jornada):
             else:
                 cellL(PLAN_DATE_W + PLAN_ID_W, y, PLAN_VAL_W, row_h, "", bg)
 
-    # ── 11b. Gráfico de linha com projeção ──────────────────────────────────────
+    # ── 4b. Gráfico de linha com projeção ──────────────────────────────────────
     ax_chart.set_axis_on()
     ax_chart.spines[["top", "right"]].set_visible(False)
 
-    meses_hist = sorted(resumo.index.tolist())
-    vals_hist = [resumo.loc[m, "Pct"] for m in meses_hist]
-    labels_hist = [MESES_LABEL[m] for m in meses_hist]
-
-    ax_chart.plot(labels_hist, vals_hist, color="black", linewidth=1.5,
-                  marker="o", markersize=4, label="% Falha Real")
+    # O real é contínuo até o mês passado e pontilhado do mês passado para o
+    # atual: o mês do relatório ainda está correndo, e o número dele muda até
+    # fechar. O real vem antes da linha verde de propósito — o eixo é
+    # categórico, e a ordem em que os meses aparecem nos plots é a ordem do eixo.
+    desenhar_real(ax_chart, labels_hist, vals_hist, fechado=ns["mes_fechado"])
     for m, v in zip(labels_hist, vals_hist):
         ax_chart.annotate(f"{v:.2f}%".replace(".", ","), xy=(m, v), xytext=(0, 7),
-                           textcoords="offset points", ha="center", fontsize=7)
+                           textcoords="offset points", ha="center", fontsize=7,
+                           **ROTULO_SOBRE_LINHA)
 
-    _all_dft_ms = df[
-        df["DefectNumber__c"].notna() &
-        (df["DefectNumber__c"] > 0) &
-        (df["DefectNumber__c"] != 999999) &
-        df["DFT_BugfixMilestone"].notna()
-    ].copy()
-    _ms_parsed = pd.to_datetime(_all_dft_ms["DFT_BugfixMilestone"], utc=True, errors="coerce")
-    _all_dft_ms = _all_dft_ms[_ms_parsed.notna()].copy()
-    _all_dft_ms["_MS_brt"] = _ms_parsed[_all_dft_ms.index].dt.tz_convert("America/Sao_Paulo").dt.normalize()
-    _all_dft_ms["_MS_mes"] = _all_dft_ms["_MS_brt"].dt.month
-    _dft_to_ms = (
-        _all_dft_ms[["DefectNumber__c", "_MS_brt", "_MS_mes"]]
-        .drop_duplicates("DefectNumber__c")
-        .set_index("DefectNumber__c")
-    )
+    desenhar_verde(ax_chart, labels_hist, plan_hist, proj_labels, proj_vals)
+    for lbl, v in zip(proj_labels[1:], proj_vals[1:]):
+        ax_chart.annotate(f"{v:.2f}%".replace(".", ","), xy=(lbl, v), xytext=(0, 7),
+                          textcoords="offset points", ha="center", va="bottom",
+                          fontsize=7, color=fallout_core.COR_VERDE, **ROTULO_SOBRE_LINHA)
 
-    expect_labels = []
-    expect_vals = []
-    for i in range(1, len(meses_hist)):
-        m_ant = meses_hist[i - 1]
-        m = meses_hist[i]
-        _n_ant = df[df["Mes"] == m_ant].groupby("DefectNumber__c").size()
-        _total_ant_n = int(resumo.loc[m_ant, "Total"]) if m_ant in resumo.index else max(_n_ant.sum(), 1)
-
-        red = 0.0
-        for dft_id, row_ms in _dft_to_ms.iterrows():
-            if row_ms["_MS_mes"] != m:
-                continue
-            n = int(_n_ant.get(dft_id, 0))
-            if n == 0:
-                continue
-            pct_bruta = n / _total_ant_n * 100
-            pr = _prorate(row_ms["_MS_brt"].to_pydatetime())
-            red += pct_bruta * pr
-
-        expect_labels.append(MESES_LABEL[m])
-        expect_vals.append(round(max(vals_hist[i - 1] - red, 0), 2))
-
-    COR_EXPECT = "#E67E22"
-    if len(expect_labels) > 0:
-        ax_chart.plot(expect_labels, expect_vals, color=COR_EXPECT, linewidth=1.5,
-                      linestyle="--", marker="^", markersize=5, markerfacecolor="white",
-                      label="Expectativa mês anterior")
-        for lbl, v in zip(expect_labels, expect_vals):
-            ax_chart.annotate(f"{v:.2f}%".replace(".", ","), xy=(lbl, v), xytext=(0, -13),
-                               textcoords="offset points", ha="center", fontsize=6, color=COR_EXPECT)
-
-    proj_months_num = sorted(set(reducao["MilestoneDate"].dt.month)) if len(reducao) else []
-    proj_months_num = [m for m in proj_months_num if m > mes_atual]
-    _last_ms_mes = proj_months_num[-1] if proj_months_num else mes_atual
-    todos_meses_proj = list(range(mes_atual + 1, min(_last_ms_mes + 2, 13))) if proj_months_num else []
-
-    proj_labels = [labels_hist[-1]]
-    proj_vals = [vals_hist[-1]]
-    pct_acumulada = reducao.loc[reducao["MilestoneDate"].dt.month == mes_atual, "Pct_plena"].sum()
-
-    for m in todos_meses_proj:
-        red_mes = reducao.loc[reducao["MilestoneDate"].dt.month == m, "Pct_mes"].sum()
-        red_plena = reducao.loc[reducao["MilestoneDate"].dt.month == m, "Pct_plena"].sum()
-        cur_val = max(vals_hist[-1] - pct_acumulada - red_mes, 0)
-        proj_labels.append(MESES_LABEL[m])
-        proj_vals.append(cur_val)
-        pct_acumulada += red_plena
-
-    if len(proj_labels) > 1:
-        ax_chart.plot(proj_labels, proj_vals, color=COR_GRAY, linewidth=2,
-                      linestyle="--", marker="o", markersize=6, markerfacecolor="white",
-                      label="Projeção futura")
-        for lbl, v in zip(proj_labels[1:], proj_vals[1:]):
-            ax_chart.annotate(f"{v:.2f}%".replace(".", ","), xy=(lbl, v), xytext=(0, 7),
-                               textcoords="offset points", ha="center", va="bottom",
-                               fontsize=7, color=COR_GRAY)
+    # Base Residencial: a mesma projeção sem o Legado Aberto, em verde-escuro
+    # (ver `desenhar_sem_legado`).
+    desenhar_sem_legado(ax_chart, labels_hist, ns.get("plan_sem_legado_hist"),
+                        proj_labels, ns.get("proj_sem_legado"))
 
     todas_labels = labels_hist + proj_labels[1:]
     ax_chart.axhline(y=1, color=COR_BLUE, linewidth=1.5, label="Meta (1%)")
     ax_chart.grid(axis="y", linestyle="--", alpha=0.3)
 
-    _todos_vals = vals_hist + proj_vals + expect_vals
+    _todos_vals = (vals_hist + proj_vals
+                   + [v for v in plan_hist if v == v])
     _ymin, _ymax = ax_chart.get_ylim()
     _data_max = max(_todos_vals) if _todos_vals else _ymax
     ax_chart.set_ylim(_ymin, max(_ymax, _data_max) * 1.18)
@@ -791,11 +799,13 @@ def gerar_relatorio(base_dir, jornada):
     ax_chart.set_xticks(range(len(todas_labels)))
     ax_chart.set_xticklabels(todas_labels, rotation=30, ha="right", fontsize=7)
 
-    data_corte = hoje.tz_convert("America/Sao_Paulo")
-    ax_chart.text(0.99, 1.04, f"Data de Corte: {data_corte.strftime('%d/%b')}",
+    # O último dia que entrou nos números (ver fallout_core.data_corte), o mesmo
+    # em todos os slides. Rodar o relatório dias depois não muda o rótulo.
+    _corte = fallout_core.data_corte(base_dir, hoje) or hoje.tz_convert("America/Sao_Paulo").date()
+    ax_chart.text(0.99, 1.04, f"Data de Corte: {_corte.strftime('%d/%b')}",
                   transform=ax_chart.transAxes, ha="right", fontsize=7.5, fontstyle="italic")
 
-    # ── 11c. Tabela detalhada (reaproveitando pivot2) ───────────────────────────
+    # ── 4c. Tabela detalhada (reaproveitando pivot2) ───────────────────────────
     ax_table.set_xlim(0, sum(COL_W))
     ax_table.set_ylim(0, fig_h)
 
@@ -856,27 +866,9 @@ def gerar_relatorio(base_dir, jornada):
 
     fig.subplots_adjust(left=0.01, right=0.99, top=0.97, bottom=0.01, hspace=0.18, wspace=0.12)
 
-    return {
-        "df": df,
-        "resumo": resumo,
-        "MESES_LABEL": MESES_LABEL,
-        "mes_atual": mes_atual,
-        "hoje": hoje,
-        "fallout_pct": fallout_pct,
-        "meses_vol": meses_vol,
-        "dist_items": dist_items,
-        "reducao": reducao,
-        "COL_NAMES": COL_NAMES,
-        "meses_tab": meses_tab,
-        "pivot2": pivot2,
-        "fmt_id": fmt_id,
-        "fmt_milestone": fmt_milestone,
-        "pct_m": pct_m,
-        "fig": fig,
-        "ax_chart": ax_chart,
-        "proj_labels": proj_labels,
-        "proj_vals": proj_vals,
-    }
+    ns["fig"] = fig
+    ns["ax_chart"] = ax_chart
+    return ns
 
 
 def _rect(x, y, w, h, **kwargs):

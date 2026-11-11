@@ -10,3 +10,7 @@ __pycache__/
 .streamlit/secrets.toml
 dist/
 launcher.log
+
+# Configuração local do Google Drive (a chave já cai no *.json)
+drive_pasta.txt
+fonte_dados.txt
