@@ -17,6 +17,7 @@ import io
 import json
 import os
 import re
+import sys
 import threading
 import zipfile
 from xml.etree import ElementTree
@@ -614,9 +615,31 @@ def _tem_jornadas(caminho):
     return any(formato_jornada(os.path.join(caminho, d)) for d in _subpastas(caminho))
 
 
+def segredo_streamlit(nome):
+    """
+    `st.secrets[nome]` (como dict, se for uma tabela), ou None. É de onde vêm a
+    chave e a pasta do Drive no Streamlit Cloud, que não tem os arquivos ao lado
+    do app (ver drive_sync.py). Só consulta com o Streamlit já carregado: a
+    linha de comando e o PowerPoint gerado fora do app não o importam por isso.
+    """
+    if "streamlit" not in sys.modules:
+        return None
+    try:
+        valor = sys.modules["streamlit"].secrets.get(nome)
+    except Exception:                                    # noqa: BLE001 — sem secrets.toml
+        return None
+    if valor is None:
+        return None
+    return dict(valor) if hasattr(valor, "keys") else valor
+
+
 def drive_disponivel(base_dir):
-    """True se a chave do Google Drive está ao lado do app (ver drive_sync.py)."""
-    return os.path.isfile(os.path.join(base_dir, ARQ_CHAVE_DRIVE))
+    """
+    True se há chave do Google Drive: o arquivo ao lado do app ou, no
+    Streamlit Cloud, a tabela `drive_chave` dos Secrets (ver drive_sync.py).
+    """
+    return (os.path.isfile(os.path.join(base_dir, ARQ_CHAVE_DRIVE))
+            or bool(segredo_streamlit("drive_chave")))
 
 
 def fonte_escolhida(base_dir):

@@ -20,9 +20,15 @@ que o Drive informa), e apaga do espelho o que saiu do Drive. Cada arquivo
 baixado fica com a data de modificação do Drive, porque os caches e a
 conversão dos XLSX se guiam por ela.
 
+No Streamlit Cloud, que só recebe o que está no git, os dois vão nos Secrets
+do app (Settings > Secrets), em TOML: `drive_pasta = "<link>"` e a tabela
+`[drive_chave]` com os campos da chave. Os arquivos, quando existem, ganham.
+
 O espelho persiste entre aberturas: sem internet, o app usa a última cópia.
 
-    python drive_sync.py        sincroniza e mostra o que mudou
+    python drive_sync.py            sincroniza e mostra o que mudou
+    python drive_sync.py --secrets  grava .streamlit/secrets.toml a partir dos
+                                    dois arquivos, para colar no Streamlit Cloud
 """
 
 import contextlib
@@ -91,16 +97,34 @@ def id_da_pasta(texto):
     return None
 
 
-def _ler_pasta(base_dir):
+def _link_pasta(base_dir):
+    """O link da pasta: do `drive_pasta.txt` ou, sem ele, do `drive_pasta` dos Secrets."""
     caminho = os.path.join(base_dir, ARQ_PASTA)
-    if not os.path.isfile(caminho):
-        raise ErroDrive(f"Falta o `{ARQ_PASTA}` ao lado do app, com o link da pasta do Drive.")
-    with open(caminho, encoding="utf-8-sig") as f:
-        linhas = [l.strip() for l in f if l.strip() and not l.lstrip().startswith("#")]
-    pasta = id_da_pasta(linhas[0]) if linhas else None
+    if os.path.isfile(caminho):
+        with open(caminho, encoding="utf-8-sig") as f:
+            linhas = [l.strip() for l in f if l.strip() and not l.lstrip().startswith("#")]
+        return (linhas[0] if linhas else ""), f"`{ARQ_PASTA}`"
+    return fallout_core.segredo_streamlit("drive_pasta"), "`drive_pasta` dos Secrets"
+
+
+def _ler_pasta(base_dir):
+    link, origem = _link_pasta(base_dir)
+    if link is None:
+        raise ErroDrive(f"Falta o `{ARQ_PASTA}` ao lado do app (ou `drive_pasta` nos "
+                        f"Secrets do Streamlit), com o link da pasta do Drive.")
+    pasta = id_da_pasta(str(link))
     if not pasta:
-        raise ErroDrive(f"O `{ARQ_PASTA}` não tem um link de pasta do Drive reconhecível.")
+        raise ErroDrive(f"O {origem} não tem um link de pasta do Drive reconhecível.")
     return pasta
+
+
+def _info_chave(base_dir):
+    """A chave da service account como dict: do arquivo ou da tabela `drive_chave` dos Secrets."""
+    chave = os.path.join(base_dir, fallout_core.ARQ_CHAVE_DRIVE)
+    if os.path.isfile(chave):
+        with open(chave, encoding="utf-8") as f:
+            return json.load(f), f"`{fallout_core.ARQ_CHAVE_DRIVE}`"
+    return fallout_core.segredo_streamlit("drive_chave") or {}, "`drive_chave` dos Secrets"
 
 
 def _sessao(base_dir):
@@ -108,15 +132,40 @@ def _sessao(base_dir):
     from google.auth.transport.requests import AuthorizedSession
     from google.oauth2 import service_account
 
-    chave = os.path.join(base_dir, fallout_core.ARQ_CHAVE_DRIVE)
+    origem = f"`{fallout_core.ARQ_CHAVE_DRIVE}`"
     try:
-        with open(chave, encoding="utf-8") as f:
-            email = json.load(f).get("client_email", "")
-        cred = service_account.Credentials.from_service_account_file(chave, scopes=[ESCOPO])
+        info, origem = _info_chave(base_dir)
+        cred = service_account.Credentials.from_service_account_info(info, scopes=[ESCOPO])
     except (OSError, ValueError, KeyError) as e:
-        raise ErroDrive(f"A chave `{fallout_core.ARQ_CHAVE_DRIVE}` não é uma chave de "
-                        f"service account válida ({e}).") from e
-    return AuthorizedSession(cred), email
+        raise ErroDrive(f"A chave {origem} não é uma chave de service account "
+                        f"válida ({e}).") from e
+    return AuthorizedSession(cred), info.get("client_email", "")
+
+
+def _toml(valor):
+    # O escape de string do JSON (barra-n, aspas, barra-u) também vale no TOML.
+    return json.dumps(str(valor))
+
+
+def gravar_secrets(base_dir):
+    """
+    Grava `.streamlit/secrets.toml` com a pasta e a chave dos dois arquivos, no
+    formato dos Secrets do Streamlit Cloud, e devolve o caminho. O arquivo fica
+    fora do git (.gitignore) e serve também para testar o app localmente.
+    """
+    link, _ = _link_pasta(base_dir)
+    info, _ = _info_chave(base_dir)
+    if not link or not info:
+        raise ErroDrive(f"Precisa do `{ARQ_PASTA}` e da `{fallout_core.ARQ_CHAVE_DRIVE}` "
+                        f"ao lado do app para montar os Secrets.")
+    linhas = [f"drive_pasta = {_toml(link)}", "", "[drive_chave]"]
+    linhas += [f"{k} = {_toml(v)}" for k, v in info.items()]
+    pasta = os.path.join(base_dir, ".streamlit")
+    os.makedirs(pasta, exist_ok=True)
+    caminho = os.path.join(pasta, "secrets.toml")
+    with open(caminho, "w", encoding="utf-8", newline="\n") as f:
+        f.write("\n".join(linhas) + "\n")
+    return caminho
 
 
 def _get(sessao, url, email, **params):
@@ -276,6 +325,13 @@ def sincronizar(base_dir, progresso=None):
 if __name__ == "__main__":
     sys.stdout.reconfigure(encoding="utf-8")
     base = os.path.dirname(os.path.abspath(__file__))
+    if "--secrets" in sys.argv[1:]:
+        try:
+            print("Gravado:", gravar_secrets(base))
+        except ErroDrive as e:
+            sys.exit(str(e))
+        print("Copie o conteúdo dele para Settings > Secrets do app no Streamlit Cloud.")
+        sys.exit(0)
     if not configurado(base):
         sys.exit(f"Sem {fallout_core.ARQ_CHAVE_DRIVE} ao lado do app: o Drive está desligado.")
     try:
